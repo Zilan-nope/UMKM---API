@@ -1,218 +1,303 @@
-type DataRow = Record<string, unknown>;
+import type { StoredDataset } from '../context/AppContext';
+import { compareIsoDates, normalizeBusinessDate } from './dateUtils';
+import { buildRowSignature } from './fileParser';
+import { isSummaryLabel, toNumber } from './numberUtils';
 
-type DatasetLike = {
-  rows?: DataRow[];
-  category?: string;
-};
+export interface DailyTrendPoint {
+  date: string;
+  revenue: number;
+  expense: number;
+  grossProfit: number;
+  transactions: number;
+}
 
-const toNumber = (value: unknown): number => {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string') {
-    const parsed = Number(value.replace(/[^\d.-]/g, ''));
-    return Number.isFinite(parsed) ? parsed : 0;
+export interface ProductPerformance {
+  name: string;
+  category: string;
+  qtySold: number;
+  revenue: number;
+  hpp: number;
+  grossProfit: number;
+  hasActualHpp: boolean;
+}
+
+export interface LowStockAlert {
+  name: string;
+  category: string;
+  stock: number;
+  minStock: number;
+}
+
+export interface UnifiedBusinessSnapshot {
+  totalRevenue: number;
+  totalActualHpp: number;
+  totalGrossProfitActual: number;
+  grossMarginPercent: number;
+  totalTransactions: number;
+  salesWithHppCount: number;
+  salesWithoutHppCount: number;
+  revenueWithoutHpp: number;
+
+  otherIncome: number;
+  totalExpense: number;
+  monthlyPayroll: number;
+  netOperatingCashflow: number;
+
+  totalProductSku: number;
+  totalStockUnits: number;
+  inventoryAssetValue: number;
+  lowStockItems: LowStockAlert[];
+
+  dailyTrend: DailyTrendPoint[];
+  categoryBreakdown: { name: string; value: number }[];
+  topProducts: ProductPerformance[];
+  dateRange: { start: string; end: string };
+  datasetCount: number;
+}
+
+export function buildUnifiedBusinessSnapshot(
+  datasets: StoredDataset[]
+): UnifiedBusinessSnapshot {
+  const catalogHppMap = new Map<string, number>();
+  const inventoryItemMap = new Map<
+    string,
+    { name: string; category: string; stock: number; minStock: number; modal: number; jual: number }
+  >();
+
+  for (const ds of datasets) {
+    if (ds.category !== 'inventory') continue;
+    for (const r of ds.rows) {
+      const name = String(r['Nama_Produk'] ?? r['Produk'] ?? '').trim();
+      if (!name || isSummaryLabel(name)) continue;
+
+      const key = name.toLowerCase();
+      const stock = toNumber(r['Stok_Saat_Ini'] ?? r['Stok'], 0);
+      const minStock = toNumber(r['Stok_Minimum'], 5);
+      const modal = toNumber(r['Harga_Modal'] ?? r['HPP'], 0);
+      const jual = toNumber(r['Harga_Jual'] ?? r['Harga'], 0);
+      const category = String(r['Kategori'] ?? 'Umum').trim() || 'Umum';
+
+      if (modal > 0) {
+        catalogHppMap.set(key, modal);
+      }
+      inventoryItemMap.set(key, { name, category, stock, minStock, modal, jual });
+    }
   }
-  return 0;
-};
 
-const getRows = (dataset: DatasetLike | null | undefined): DataRow[] => {
-  const rows = dataset?.rows ?? [];
-  return Array.isArray(rows) ? rows : [];
-};
+  let totalProductSku = 0;
+  let totalStockUnits = 0;
+  let inventoryAssetValue = 0;
+  const lowStockItems: LowStockAlert[] = [];
 
-const findKey = (row: DataRow, patterns: RegExp[]): string | undefined => {
-  const lowerRow = Object.keys(row).find((key) =>
-    patterns.some((pattern) => pattern.test(key.toLowerCase()))
-  );
-  return lowerRow;
-};
-
-const getValue = (row: DataRow, patterns: RegExp[]): unknown => {
-  const key = findKey(row, patterns);
-  if (!key) return undefined;
-  return row[key];
-};
-
-const getStringValue = (row: DataRow, patterns: RegExp[], fallback = 'Unknown'): string => {
-  const value = getValue(row, patterns);
-  if (value === undefined || value === null || value === '') return fallback;
-  return String(value);
-};
-
-const getDateKey = (row: DataRow): string => {
-  const value = getValue(row, [/tgl|tanggal|date|day|waktu|created/]);
-  if (value === undefined || value === null || value === '') return 'Tanggal Tidak Diketahui';
-
-  const raw = String(value).trim();
-  if (!raw) return 'Tanggal Tidak Diketahui';
-
-  const date = new Date(raw);
-  if (!Number.isNaN(date.getTime())) {
-    return new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short' }).format(date);
-  }
-
-  return raw;
-};
-
-export function calculateSalesMetrics(dataset: DatasetLike | null | undefined) {
-  const rows = getRows(dataset);
-  const products = new Map<string, { name: string; qty: number; revenue: number }>();
-  const dailyTrend = new Map<string, { date: string; omzet: number; laba: number }>();
-  const categoryBreakdown = new Map<string, number>();
+  inventoryItemMap.forEach((item) => {
+    totalProductSku += 1;
+    totalStockUnits += item.stock;
+    inventoryAssetValue += item.stock * (item.modal > 0 ? item.modal : item.jual);
+    if (item.stock <= item.minStock) {
+      lowStockItems.push({
+        name: item.name,
+        category: item.category,
+        stock: item.stock,
+        minStock: item.minStock,
+      });
+    }
+  });
+  lowStockItems.sort((a, b) => a.stock - b.stock);
 
   let totalRevenue = 0;
-  let totalUnits = 0;
-  let totalGrossProfit = 0;
-  let hasCostData = false;
+  let totalActualHpp = 0;
+  let totalGrossProfitActual = 0;
+  let totalTransactions = 0;
+  let salesWithHppCount = 0;
+  let salesWithoutHppCount = 0;
+  let revenueWithoutHpp = 0;
 
-  rows.forEach((row) => {
-    const name = getStringValue(row, [/produk|barang|item|nama|product/], 'Produk');
-    const qtyValue = getValue(row, [/qty|jumlah|kuantitas|unit|pcs|qty_/,]);
-    const qty = toNumber(qtyValue) || 1;
+  const seenSalesSignatures = new Set<string>();
+  const dailyMap = new Map<string, DailyTrendPoint>();
+  const categoryMap = new Map<string, number>();
+  const productPerfMap = new Map<string, ProductPerformance>();
 
-    const revenueValue = getValue(row, [/omzet|revenue|total|penjualan|sales|amount|nilai/]);
-    const priceValue = getValue(row, [/harga|price|unit_price|selling|jual/]);
-    const revenue = toNumber(revenueValue) || toNumber(priceValue) * qty;
-
-    const costValue = getValue(row, [/modal|hpp|cost|biaya|cogs/]);
-    const cost = toNumber(costValue);
-
-    if (costValue !== undefined && costValue !== null && costValue !== '') {
-      hasCostData = true;
-      totalGrossProfit += revenue - cost;
+  const ensureDay = (isoDate: string): DailyTrendPoint => {
+    const key = isoDate || 'Tanpa Tanggal';
+    let entry = dailyMap.get(key);
+    if (!entry) {
+      entry = { date: key, revenue: 0, expense: 0, grossProfit: 0, transactions: 0 };
+      dailyMap.set(key, entry);
     }
-
-    totalRevenue += revenue;
-    totalUnits += qty;
-
-    const product = products.get(name) ?? { name, qty: 0, revenue: 0 };
-    product.qty += qty;
-    product.revenue += revenue;
-    products.set(name, product);
-
-    const dateKey = getDateKey(row);
-    const daily = dailyTrend.get(dateKey) ?? { date: dateKey, omzet: 0, laba: 0 };
-    daily.omzet += revenue;
-    if (hasCostData && costValue !== undefined && costValue !== null && costValue !== '') {
-      daily.laba += revenue - cost;
-    }
-    dailyTrend.set(dateKey, daily);
-
-    const categoryName = getStringValue(row, [/kategori|group|jenis|cluster|brand/], 'Umum');
-    categoryBreakdown.set(categoryName, (categoryBreakdown.get(categoryName) ?? 0) + revenue);
-  });
-
-  const sortedProducts = [...products.values()].sort((a, b) => b.revenue - a.revenue);
-  const dailyTrendList = [...dailyTrend.values()].sort((a, b) => a.date.localeCompare(b.date));
-  const categoryBreakdownList = [...categoryBreakdown.entries()]
-    .map(([name, value]) => ({ name, value }))
-    .sort((a, b) => b.value - a.value);
-
-  return {
-    totalTransactions: rows.length,
-    totalRevenue,
-    totalUnits,
-    averageOrderValue: rows.length ? totalRevenue / rows.length : 0,
-    hasCostData,
-    totalGrossProfit,
-    grossMarginPercent: totalRevenue ? (totalGrossProfit / totalRevenue) * 100 : 0,
-    topProducts: sortedProducts,
-    dailyTrend: dailyTrendList,
-    categoryBreakdown: categoryBreakdownList,
+    return entry;
   };
-}
 
-export function calculateFinanceMetrics(dataset: DatasetLike | null | undefined) {
-  const rows = getRows(dataset);
-  const dailyCashflow = new Map<string, { date: string; masuk: number; keluar: number }>();
+  for (const ds of datasets) {
+    if (ds.category !== 'sales') continue;
+    for (const r of ds.rows) {
+      const name = String(r['Nama_Produk'] ?? r['Produk'] ?? '').trim();
+      if (!name || isSummaryLabel(name)) continue;
 
-  let totalIncome = 0;
+      const isoDate = normalizeBusinessDate(r['Tanggal']);
+      const qty = Math.max(1, toNumber(r['Qty'], 1));
+      const unitPrice = toNumber(r['Harga_Satuan'] ?? r['Harga'], 0);
+      const rawTotal = toNumber(r['Total'], 0);
+      const revenue = rawTotal > 0 ? rawTotal : qty * unitPrice;
+
+      const sig = buildRowSignature('sales', {
+        Tanggal: isoDate,
+        Nama_Produk: name,
+        Qty: qty,
+        Total: revenue,
+      });
+      if (seenSalesSignatures.has(sig)) continue;
+      seenSalesSignatures.add(sig);
+
+      const category = String(r['Kategori'] ?? 'Umum').trim() || 'Umum';
+      const rowUnitModal = toNumber(r['Harga_Modal'] ?? r['HPP'], 0);
+      const lookupUnitModal = catalogHppMap.get(name.toLowerCase()) ?? 0;
+      const effectiveUnitModal = rowUnitModal > 0 ? rowUnitModal : lookupUnitModal;
+
+      const hasHpp = effectiveUnitModal > 0;
+      const rowHpp = hasHpp ? effectiveUnitModal * qty : 0;
+      const rowGrossProfit = hasHpp ? revenue - rowHpp : 0;
+
+      totalRevenue += revenue;
+      totalTransactions += 1;
+
+      if (hasHpp) {
+        totalActualHpp += rowHpp;
+        totalGrossProfitActual += rowGrossProfit;
+        salesWithHppCount += 1;
+      } else {
+        salesWithoutHppCount += 1;
+        revenueWithoutHpp += revenue;
+      }
+
+      const day = ensureDay(isoDate);
+      day.revenue += revenue;
+      day.grossProfit += rowGrossProfit;
+      day.transactions += 1;
+
+      categoryMap.set(category, (categoryMap.get(category) ?? 0) + revenue);
+
+      const prodKey = name.toLowerCase();
+      const existingProd = productPerfMap.get(prodKey) ?? {
+        name,
+        category,
+        qtySold: 0,
+        revenue: 0,
+        hpp: 0,
+        grossProfit: 0,
+        hasActualHpp: false,
+      };
+      existingProd.qtySold += qty;
+      existingProd.revenue += revenue;
+      existingProd.hpp += rowHpp;
+      existingProd.grossProfit += rowGrossProfit;
+      existingProd.hasActualHpp = existingProd.hasActualHpp || hasHpp;
+      productPerfMap.set(prodKey, existingProd);
+    }
+  }
+
+  let otherIncome = 0;
   let totalExpense = 0;
+  let monthlyPayroll = 0;
+  const seenFinanceSignatures = new Set<string>();
 
-  rows.forEach((row) => {
-    const amount = toNumber(getValue(row, [/jumlah|nominal|amount|total|nilai|income|pemasukan|penjualan/]));
-    const label = String(getValue(row, [/jenis|tipe|kategori|type|group|status/]) ?? '').toLowerCase();
-    const isExpense = /keluar|expense|pengeluaran|biaya|cost|outflow/.test(label) || amount < 0;
-    const value = Math.abs(amount);
+  for (const ds of datasets) {
+    if (ds.category === 'finance') {
+      for (const r of ds.rows) {
+        const desc = String(r['Nama_Barang_Keperluan'] ?? r['Keterangan'] ?? '').trim();
+        if (!desc || isSummaryLabel(desc)) continue;
 
-    if (isExpense) {
-      totalExpense += value;
-    } else {
-      totalIncome += value;
-    }
+        const isoDate = normalizeBusinessDate(r['Tanggal']);
+        const jenisRaw = String(r['Jenis'] ?? 'Pengeluaran').trim();
+        const isIncome = /(masuk|pemasukan|income|debit)/i.test(jenisRaw);
+        const nominal = Math.abs(toNumber(r['Nominal'] ?? r['Total'], 0));
 
-    const dateKey = getDateKey(row);
-    const daily = dailyCashflow.get(dateKey) ?? { date: dateKey, masuk: 0, keluar: 0 };
-    if (isExpense) {
-      daily.keluar += value;
-    } else {
-      daily.masuk += value;
-    }
-    dailyCashflow.set(dateKey, daily);
-  });
+        const sig = buildRowSignature('finance', {
+          Tanggal: isoDate,
+          Nama_Barang_Keperluan: desc,
+          Jenis: isIncome ? 'Pemasukan' : 'Pengeluaran',
+          Nominal: nominal,
+        });
+        if (seenFinanceSignatures.has(sig)) continue;
+        seenFinanceSignatures.add(sig);
 
-  return {
-    totalIncome,
-    totalExpense,
-    netCashflow: totalIncome - totalExpense,
-    dailyCashflow: [...dailyCashflow.values()].sort((a, b) => a.date.localeCompare(b.date)),
-  };
-}
-
-export function calculateInventoryMetrics(dataset: DatasetLike | null | undefined) {
-  const rows = getRows(dataset);
-  const items = rows.map((row) => {
-    const name = getStringValue(row, [/produk|barang|item|nama|sku|product/], 'Barang');
-    const current = toNumber(getValue(row, [/stok|stock|jumlah|sisa|qty|available|onhand/]));
-    const minimum = toNumber(getValue(row, [/min|minimum|batas|restock|reorder/])) || 5;
-    return { name, current, minimum };
-  });
-
-  const lowStockItems = items.filter((item) => item.current <= item.minimum);
-  const stockChart = [...items]
-    .sort((a, b) => a.current - b.current)
-    .map((item) => ({ name: item.name, stok: item.current, min: item.minimum }));
-
-  return {
-    totalItems: items.length,
-    totalStockUnits: items.reduce((sum, item) => sum + item.current, 0),
-    lowStockItems: lowStockItems.map((item) => ({
-      name: item.name,
-      current: item.current,
-      min: item.minimum,
-    })),
-    stockChart,
-  };
-}
-
-export function calculateGenericMetrics(dataset: DatasetLike | null | undefined) {
-  const rows = getRows(dataset);
-  const numericValues: number[] = [];
-  const grouped = new Map<string, number>();
-
-  rows.forEach((row) => {
-    Object.entries(row).forEach(([key, value]) => {
-      const numeric = toNumber(value);
-      if (numeric !== 0 || value === 0 || value === '0') {
-        numericValues.push(numeric);
+        const day = ensureDay(isoDate);
+        if (isIncome) {
+          otherIncome += nominal;
+          day.revenue += nominal;
+        } else {
+          totalExpense += nominal;
+          day.expense += nominal;
+        }
       }
-
-      const categoryKey = /kategori|group|jenis|label|segment/.test(key.toLowerCase())
-        ? String(value ?? 'Uncategorized')
-        : undefined;
-      if (categoryKey) {
-        grouped.set(categoryKey, (grouped.get(categoryKey) ?? 0) + numeric);
+    } else if (ds.category === 'employee') {
+      for (const r of ds.rows) {
+        const empName = String(r['Nama_Karyawan'] ?? '').trim();
+        if (!empName || isSummaryLabel(empName)) continue;
+        monthlyPayroll += Math.abs(toNumber(r['Gaji_Bulanan'] ?? r['Gaji'], 0));
       }
-    });
-  });
+    }
+  }
 
-  const groupedChart = [...grouped.entries()]
+  const dailyTrend = Array.from(dailyMap.values()).sort((a, b) =>
+    compareIsoDates(
+      a.date === 'Tanpa Tanggal' ? '' : a.date,
+      b.date === 'Tanpa Tanggal' ? '' : b.date
+    )
+  );
+
+  const datedPoints = dailyTrend.filter((d) => d.date !== 'Tanpa Tanggal');
+  const dateRange = {
+    start: datedPoints.length > 0 ? datedPoints[0].date : '',
+    end: datedPoints.length > 0 ? datedPoints[datedPoints.length - 1].date : '',
+  };
+
+  const categoryBreakdown = Array.from(categoryMap.entries())
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value);
 
+  const topProducts = Array.from(productPerfMap.values()).sort((a, b) => b.revenue - a.revenue);
+
+  const knownRevenueWithHpp = totalRevenue - revenueWithoutHpp;
+  const grossMarginPercent =
+    knownRevenueWithHpp > 0 ? (totalGrossProfitActual / knownRevenueWithHpp) * 100 : 0;
+
+  const netOperatingCashflow = totalRevenue + otherIncome - totalActualHpp - totalExpense;
+
   return {
-    totalRecords: rows.length,
-    numericLabel: 'nilai numerik',
-    totalNumericValue: numericValues.reduce((sum, value) => sum + value, 0),
-    groupedChart,
+    totalRevenue,
+    totalActualHpp,
+    totalGrossProfitActual,
+    grossMarginPercent,
+    totalTransactions,
+    salesWithHppCount,
+    salesWithoutHppCount,
+    revenueWithoutHpp,
+    otherIncome,
+    totalExpense,
+    monthlyPayroll,
+    netOperatingCashflow,
+    totalProductSku,
+    totalStockUnits,
+    inventoryAssetValue,
+    lowStockItems,
+    dailyTrend,
+    categoryBreakdown,
+    topProducts,
+    dateRange,
+    datasetCount: datasets.length,
+  };
+}
+
+export function calculateSalesMetrics(dataset: StoredDataset) {
+  const snap = buildUnifiedBusinessSnapshot([dataset]);
+  return {
+    totalRevenue: snap.totalRevenue,
+    totalProfit: snap.totalGrossProfitActual,
+    totalTransactions: snap.totalTransactions,
+    topProducts: snap.topProducts.map((p) => ({
+      name: p.name,
+      qty: p.qtySold,
+      revenue: p.revenue,
+    })),
   };
 }

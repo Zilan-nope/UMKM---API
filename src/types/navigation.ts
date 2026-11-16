@@ -1,23 +1,23 @@
-export type BusinessType = 'retail' | 'cafe_restaurant' | 'culinary' | 'service' | 'other';
-
 export type PageId =
   | 'ringkasan'
+  | 'analitik'
   | 'database'
-  | 'analisis'
-  | 'asisten-ai'
+  | 'ai'
   | 'laporan'
   | 'pengaturan';
 
-export interface NavItem {
-  id: PageId;
-  label: string;
-  description: string;
-}
+export type BusinessType =
+  | 'retail'
+  | 'fnb'
+  | 'jasa'
+  | 'produksi'
+  | 'online'
+  | 'lainnya';
 
 export interface BusinessProfile {
   name: string;
-  businessType: BusinessType;
-  currency: 'IDR' | 'USD' | 'SGD' | 'MYR';
+  businessType: string;
+  currency: string;
   city: string;
   ownerName: string;
   notes: string;
