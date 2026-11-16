@@ -1,0 +1,18 @@
+{
+  "name": "UMKM - API | Manajemen Usaha & AI",
+  "short_name": "UMKM - API",
+  "description": "Aplikasi pencatatan penjualan, pembelian, stok produk, karyawan, dan asisten AI untuk UMKM.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090B",
+  "theme_color": "#EA580C",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/logo-app.webp",
+      "sizes": "512x512",
+      "type": "image/webp",
+      "purpose": "any maskable"
+    }
+  ]
+}

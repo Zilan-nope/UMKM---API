@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --gw-canvas: #f4f7f5;
+  --gw-surface: #ffffff;
+  --gw-border: #dfe7e2;
+  --gw-primary: #16a34a;
+  --gw-primary-hover: #15803d;
+  --gw-soft: #eaf5ee;
+  --gw-text: #131c17;
+}
+
+body {
+  background-color: var(--gw-canvas);
+  color: var(--gw-text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+html.dark body {
+  background-color: #0d1310;
+  color: #ecf2ee;
+}
+
+/* Latar belakang utama Greeny White & Dark Pine yang tenang di mata */
+.bg-slate-50 {
+  background-color: #f4f7f5 !important;
+}
+
+html.dark .dark\:bg-slate-950 {
+  background-color: #0d1310 !important;
+}
+
+html.dark .dark\:bg-slate-900 {
+  background-color: #141d18 !important;
+}
+
+html.dark .dark\:bg-slate-800 {
+  background-color: #1c2721 !important;
+}
+
+.border-slate-200 {
+  border-color: #dfe7e2 !important;
+}
+
+html.dark .dark\:border-slate-800 {
+  border-color: #24312a !important;
+}
+
+html.dark .dark\:border-slate-700 {
+  border-color: #2d3d34 !important;
+}
+
+/* Tombol & Aksen Hijau Natural Bersih (Tanpa gradasi berlebihan) */
+.bg-emerald-600 {
+  background-image: none !important;
+  background-color: #16a34a !important;
+  box-shadow: 0 1px 2px rgba(22, 163, 74, 0.18);
+}
+
+.hover\:bg-emerald-700:hover {
+  background-image: none !important;
+  background-color: #15803d !important;
+}
+
+.text-emerald-600 {
+  color: #16a34a !important;
+}
+
+html.dark .text-emerald-600,
+html.dark .dark\:text-emerald-400 {
+  color: #4ade80 !important;
+}
+
+.bg-emerald-50 {
+  background-color: #eaf5ee !important;
+}
+
+.bg-emerald-100 {
+  background-color: #dcfce7 !important;
+}
+
+html.dark .dark\:bg-emerald-950,
+html.dark .dark\:bg-emerald-950\/40,
+html.dark .dark\:bg-emerald-950\/60 {
+  background-color: rgba(20, 83, 45, 0.28) !important;
+}
+
+/* Scrollbar minimalis */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(22, 163, 74, 0.28);
+  border-radius: 9999px;
+}
