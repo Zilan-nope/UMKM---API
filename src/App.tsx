@@ -1,9 +1,11 @@
 import { Menu, PlusCircle } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { AppProvider, useApp } from './context/AppContext';
+import { AiAssistantPage } from './pages/AiAssistantPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { DatabasePage } from './pages/DatabasePage';
 import { OverviewPage } from './pages/OverviewPage';
+import { ReportsPage } from './pages/ReportsPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
@@ -18,6 +20,14 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   database: {
     title: 'Database Usaha',
     subtitle: 'Smart File Import (CSV/Excel/JSON) & pencatatan',
+  },
+  laporan: {
+    title: 'Laporan & Ekspor',
+    subtitle: 'Ikhtisar laba rugi & ekspor Excel, CSV, PDF',
+  },
+  ai: {
+    title: 'Asisten Analisis Usaha',
+    subtitle: 'Diagnosa kesehatan usaha & tanya jawab berbasis data',
   },
   pengaturan: {
     title: 'Pengaturan',
@@ -66,6 +76,8 @@ function DashboardShell() {
           {activePage === 'ringkasan' && <OverviewPage />}
           {activePage === 'analitik' && <AnalyticsPage />}
           {activePage === 'database' && <DatabasePage />}
+          {activePage === 'laporan' && <ReportsPage />}
+          {activePage === 'ai' && <AiAssistantPage />}
           {activePage === 'pengaturan' && <SettingsPage />}
         </main>
       </div>

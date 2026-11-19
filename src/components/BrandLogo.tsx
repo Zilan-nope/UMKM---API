@@ -1,56 +1,36 @@
-import { useState } from 'react';
-import { useApp } from '../context/AppContext';
+import { Store, TrendingUp } from 'lucide-react';
 
 interface BrandLogoProps {
-  size?: 'sm' | 'md' | 'lg';
-  showText?: boolean;
-  subtitle?: string;
+  compact?: boolean;
 }
 
-export function BrandLogo({
-  size = 'md',
-  showText = true,
-  subtitle = 'Kasir, Database & Asisten AI',
-}: BrandLogoProps) {
-  const { theme } = useApp();
-  const [imgFailed, setImgFailed] = useState(false);
-
-  const dimClass =
-    size === 'sm' ? 'w-8 h-8 rounded-lg' : size === 'lg' ? 'w-14 h-14 rounded-2xl' : 'w-10 h-10 rounded-xl';
-
-  const logoSrc = theme === 'dark' ? '/logo-website.jpg' : '/logo-app.webp';
-
+export function BrandLogo({ compact = false }: BrandLogoProps) {
   return (
-    <div className="inline-flex items-center gap-3 select-none">
-      <div
-        className={`${dimClass} overflow-hidden shrink-0 border border-slate-200 dark:border-slate-700 flex items-center justify-center ${
-          theme === 'dark' ? 'bg-[#09090B]' : 'bg-[#FAF8F5]'
-        }`}
-      >
-        {!imgFailed ? (
-          <img
-            src={logoSrc}
-            alt="Logo UMKM - API"
-            onError={() => setImgFailed(true)}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <span className="font-extrabold text-xs text-emerald-600">UA</span>
-        )}
+    <div className="flex items-center gap-3 select-none">
+      <div className="relative w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-700 text-white flex items-center justify-center shadow-sm shrink-0">
+        <Store className="w-5 h-5" />
+        <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-md bg-amber-400 text-slate-900 flex items-center justify-center shadow-xs">
+          <TrendingUp className="w-2.5 h-2.5 stroke-[2.5]" />
+        </span>
       </div>
 
-      {showText && (
-        <div className="leading-tight">
+      {!compact && (
+        <div className="min-w-0">
           <div className="flex items-center gap-1.5">
-            <span className="font-bold tracking-tight text-sm sm:text-base">UMKM - API</span>
+            <span className="font-extrabold text-base tracking-tight text-slate-900 dark:text-white">
+              Smart<span className="text-emerald-600">UMKM</span>
+            </span>
+            <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300">
+              BI
+            </span>
           </div>
-          {subtitle && (
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-              {subtitle}
-            </p>
-          )}
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+            Asisten Pembukuan & Analisis
+          </p>
         </div>
       )}
     </div>
   );
 }
+
+export default BrandLogo;

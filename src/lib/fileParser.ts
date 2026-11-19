@@ -1,792 +1,641 @@
 import * as XLSX from 'xlsx';
+import type { BusinessCategory } from '../context/AppContext';
 import { normalizeBusinessDate } from './dateUtils';
-import { isSummaryLabel, parseNumericValue, toNumber } from './numberUtils';
-
-export { parseNumericValue, toNumber };
-
-export type DatasetCategory = 'sales' | 'finance' | 'inventory' | 'employee' | 'general';
-export type BusinessCategory = Exclude<DatasetCategory, 'general'>;
-export type ImportMode = 'merge' | 'append' | 'replace';
+import { toNumber } from './numberUtils';
 
 export const MAX_IMPORT_FILE_SIZE_MB = 15;
-export const MAX_IMPORT_ROWS_PER_SHEET = 25_000;
+export const MAX_IMPORT_ROWS_PER_SHEET = 25000;
 
 export interface ColumnMappingField {
   targetField: string;
   label: string;
+  required: boolean;
   sourceColumn: string;
-  required?: boolean;
 }
 
-export interface ValidationReport {
-  totalRawRows: number;
-  validRowsCount: number;
-  skippedEmptyRows: number;
-  skippedSummaryRows: number;
-  duplicateInFileCount: number;
-  duplicateWithExistingCount: number;
-  missingHppCount: number;
-  zeroNominalCount: number;
-  truncatedByRowLimit: boolean;
-  warnings: string[];
-}
-
-export interface ParsedSheetBundle {
+export interface ParsedSheetData {
   sheetName: string;
   headers: string[];
   rawRows: Record<string, unknown>[];
-  skippedEmptyRows: number;
-  truncatedByRowLimit: boolean;
+  hasGeneratedHeaders: boolean;
+}
+
+export interface ValidationSummary {
+  validRowsCount: number;
+  skippedSummaryRows: number;
+  duplicateInFileCount: number;
+  duplicateWithExistingCount: number;
+  zeroNominalCount: number;
+  warnings: string[];
 }
 
 export interface ParsedBusinessFileResult {
   fileName: string;
-  fileSizeBytes: number;
-  format: 'csv' | 'xls' | 'xlsx' | 'json';
-  sheets: ParsedSheetBundle[];
+  sheets: ParsedSheetData[];
   activeSheetName: string;
   detectedCategory: BusinessCategory;
   detectionReason: string;
   mappings: ColumnMappingField[];
-  normalizedRows: Record<string, unknown>[];
-  validation: ValidationReport;
 }
 
-export interface DatasetDetectionResult {
-  detectedCategory: BusinessCategory;
-  confidence: 'Tinggi' | 'Sedang';
-  reason: string;
-  matchedColumns: string[];
-  rawRows: Record<string, unknown>[];
-  normalizedRows: Record<string, unknown>[];
+const STRICT_SUMMARY_LABEL_REGEX =
+  /^(\s*(grand\s*)?(sub\s*)?total|jumlah\s*(total|keseluruhan|akhir)|total\s*(penjualan|omzet|bayar|semua|akhir)|rekap(itulasi)?)\s*:?\s*$/i;
+
+function looksLikeDataCell(val: unknown): boolean {
+  if (val === null || val === undefined) return false;
+  if (typeof val === 'number' || val instanceof Date) return true;
+  const s = String(val).trim();
+  if (!s) return true;
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(s)) return true;
+  if (/^\d{1,2}[-/]\d{1,2}[-/]\d{2,4}/.test(s)) return true;
+  if (/^-?\d+([.,]\d+)?$/.test(s)) return true;
+  return false;
 }
 
-const TARGET_FIELDS_BY_CATEGORY: Record<
-  BusinessCategory,
-  { field: string; label: string; aliases: string[]; required?: boolean }[]
-> = {
-  inventory: [
-    {
-      field: 'Nama_Produk',
-      label: 'Nama Produk',
-      aliases: ['nama_produk', 'nama_barang', 'produk', 'barang', 'item', 'product_name', 'nama'],
-      required: true,
-    },
-    {
-      field: 'Kategori',
-      label: 'Kategori',
-      aliases: ['kategori', 'jenis', 'golongan', 'category', 'grup'],
-    },
-    {
-      field: 'Stok_Saat_Ini',
-      label: 'Stok Saat Ini',
-      aliases: ['stok_saat_ini', 'sisa_stok', 'stok_akhir', 'stok_awal', 'stok', 'stock', 'qty'],
-    },
-    {
-      field: 'Stok_Minimum',
-      label: 'Stok Minimum',
-      aliases: ['stok_minimum', 'stok_min', 'min_stok', 'batas_aman', 'minimum'],
-    },
-    {
-      field: 'Harga_Modal',
-      label: 'Harga Modal / Beli',
-      aliases: ['harga_modal', 'harga_beli', 'hpp', 'modal', 'cost', 'beli'],
-    },
-    {
-      field: 'Harga_Jual',
-      label: 'Harga Jual',
-      aliases: ['harga_jual', 'harga_satuan', 'harga', 'price', 'jual'],
-    },
-  ],
-  sales: [
-    {
-      field: 'Tanggal',
-      label: 'Tanggal Transaksi',
-      aliases: ['tanggal', 'tgl', 'date', 'waktu', 'created_at'],
-      required: true,
-    },
-    {
-      field: 'Nama_Produk',
-      label: 'Nama Produk',
-      aliases: ['nama_produk', 'nama_barang', 'produk', 'barang', 'item', 'nama'],
-      required: true,
-    },
-    {
-      field: 'Kategori',
-      label: 'Kategori',
-      aliases: ['kategori', 'jenis', 'category'],
-    },
-    {
-      field: 'Qty',
-      label: 'Jumlah (Qty)',
-      aliases: ['qty', 'jumlah', 'terjual', 'kuantitas', 'unit'],
-    },
-    {
-      field: 'Harga_Satuan',
-      label: 'Harga Satuan',
-      aliases: ['harga_satuan', 'harga_jual', 'harga', 'price'],
-    },
-    {
-      field: 'Harga_Modal',
-      label: 'Harga Modal (HPP)',
-      aliases: ['harga_modal', 'hpp', 'modal', 'harga_beli'],
-    },
-    {
-      field: 'Total',
-      label: 'Total Omzet',
-      aliases: ['total', 'subtotal', 'omzet', 'jumlah_harga', 'nominal', 'pendapatan'],
-    },
-  ],
-  finance: [
-    {
-      field: 'Tanggal',
-      label: 'Tanggal',
-      aliases: ['tanggal', 'tgl', 'date', 'waktu'],
-      required: true,
-    },
-    {
-      field: 'Nama_Barang_Keperluan',
-      label: 'Keterangan / Keperluan',
-      aliases: [
-        'nama_barang_keperluan',
-        'keperluan',
-        'keterangan',
-        'deskripsi',
-        'nama_barang',
-        'item',
-        'nama',
-      ],
-      required: true,
-    },
-    {
-      field: 'Jenis',
-      label: 'Jenis Arus (Masuk/Keluar)',
-      aliases: ['jenis', 'tipe', 'arus', 'mutasi', 'kategori_kas', 'type'],
-    },
-    {
-      field: 'Supplier',
-      label: 'Supplier / Pihak',
-      aliases: ['supplier', 'pemasok', 'vendor', 'toko', 'pihak'],
-    },
-    {
-      field: 'Nominal',
-      label: 'Nominal (Rp)',
-      aliases: ['nominal', 'total', 'jumlah', 'biaya', 'pengeluaran', 'pemasukan', 'harga'],
-      required: true,
-    },
-  ],
-  employee: [
-    {
-      field: 'Nama_Karyawan',
-      label: 'Nama Karyawan',
-      aliases: ['nama_karyawan', 'nama_pegawai', 'karyawan', 'pegawai', 'staf', 'nama'],
-      required: true,
-    },
-    {
-      field: 'Jabatan',
-      label: 'Jabatan',
-      aliases: ['jabatan', 'posisi', 'divisi', 'bagian', 'role'],
-    },
-    {
-      field: 'Gaji_Bulanan',
-      label: 'Gaji Bulanan',
-      aliases: ['gaji_bulanan', 'gaji', 'upah', 'salary', 'nominal'],
-    },
-  ],
-};
+function gridToSheetData(sheetName: string, grid: unknown[][]): ParsedSheetData {
+  const nonEmptyRows = grid.filter(
+    (row) => Array.isArray(row) && row.some((cell) => String(cell ?? '').trim() !== '')
+  );
 
-function normalizeKey(key: string): string {
-  return key
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
+  if (nonEmptyRows.length === 0) {
+    return { sheetName, headers: [], rawRows: [], hasGeneratedHeaders: false };
+  }
+
+  const firstRow = nonEmptyRows[0];
+  const dataLikeCount = firstRow.filter((cell) => looksLikeDataCell(cell)).length;
+  const isHeaderless = dataLikeCount >= Math.max(1, Math.ceil(firstRow.length * 0.4));
+
+  const maxCols = Math.max(...nonEmptyRows.slice(0, 50).map((r) => r.length));
+  const usedHeaders = new Set<string>();
+  const headers: string[] = [];
+
+  for (let c = 0; c < maxCols; c++) {
+    let base = isHeaderless
+      ? `Kolom_${c + 1}`
+      : String(firstRow[c] ?? '').trim() || `Kolom_${c + 1}`;
+    let candidate = base;
+    let suffix = 2;
+    while (usedHeaders.has(candidate.toLowerCase())) {
+      candidate = `${base}_${suffix}`;
+      suffix++;
+    }
+    usedHeaders.add(candidate.toLowerCase());
+    headers.push(candidate);
+  }
+
+  const startRowIdx = isHeaderless ? 0 : 1;
+  const dataRowsSlice = nonEmptyRows.slice(startRowIdx, startRowIdx + MAX_IMPORT_ROWS_PER_SHEET);
+
+  const rawRows: Record<string, unknown>[] = dataRowsSlice.map((rowArr) => {
+    const obj: Record<string, unknown> = {};
+    headers.forEach((h, idx) => {
+      obj[h] = rowArr[idx] ?? '';
+    });
+    return obj;
+  });
+
+  return {
+    sheetName,
+    headers,
+    rawRows,
+    hasGeneratedHeaders: isHeaderless,
+  };
+}
+
+export function detectCategoryFromSheet(
+  fileName: string,
+  headers: string[],
+  sampleRows: Record<string, unknown>[] = []
+): { category: BusinessCategory; reason: string } {
+  const lowerName = fileName.toLowerCase();
+  const joinedHeaders = headers.join(' ').toLowerCase();
+
+  if (/(karyawan|gaji|pegawai|employee|payroll|jabatan)/.test(lowerName + ' ' + joinedHeaders)) {
+    return {
+      category: 'employee',
+      reason: 'Terdeteksi sebagai data Karyawan & Gaji.',
+    };
+  }
+
+  if (
+    /(stok|stock|inventaris|inventory|gudang|katalog|stok_tersisa|stok_saat_ini|batas_minimum|stok_minimum)/.test(
+      lowerName + ' ' + joinedHeaders
+    ) &&
+    !/(tanggal|tgl|date|transaksi)/.test(joinedHeaders)
+  ) {
+    return {
+      category: 'inventory',
+      reason: 'Terdeteksi sebagai daftar Produk & Stok.',
+    };
+  }
+
+  if (
+    /(pengeluaran|pemasukan|kas|biaya|expense|kulakan|pembelian|supplier|keperluan)/.test(
+      lowerName + ' ' + joinedHeaders
+    )
+  ) {
+    return {
+      category: 'finance',
+      reason: 'Terdeteksi sebagai catatan Pembelian & Arus Kas.',
+    };
+  }
+
+  if (
+    /(penjualan|sales|omzet|jual|kasir|pos|nota|struk|invoice)/.test(
+      lowerName + ' ' + joinedHeaders
+    )
+  ) {
+    return {
+      category: 'sales',
+      reason: 'Terdeteksi sebagai data Transaksi Penjualan.',
+    };
+  }
+
+  const hasDateInSamples = sampleRows.slice(0, 10).some((r) =>
+    Object.values(r).some((v) => Boolean(normalizeBusinessDate(v)))
+  );
+
+  if (hasDateInSamples) {
+    return {
+      category: 'sales',
+      reason: 'Memuat tanggal & nominal transaksi sehingga diarahkan ke Penjualan.',
+    };
+  }
+
+  return {
+    category: 'inventory',
+    reason: 'Diarahkan ke katalog Produk & Stok (dapat diubah jika perlu).',
+  };
+}
+
+function findHeaderByKeywords(headers: string[], patterns: RegExp[]): string {
+  for (const pat of patterns) {
+    const found = headers.find((h) => pat.test(h.trim()));
+    if (found) return found;
+  }
+  return '';
+}
+
+function inferColumnsFromSampleValues(
+  headers: string[],
+  sampleRows: Record<string, unknown>[]
+): {
+  dateCol: string;
+  textCol: string;
+  smallIntCol: string;
+  amountCol: string;
+} {
+  const samples = sampleRows.slice(0, 15);
+  let dateCol = '';
+  let textCol = '';
+  let smallIntCol = '';
+  let amountCol = '';
+  let maxMedianAmount = -1;
+
+  for (const h of headers) {
+    const vals = samples.map((r) => r[h]).filter((v) => String(v ?? '').trim() !== '');
+    if (vals.length === 0) continue;
+
+    const dateHits = vals.filter((v) => Boolean(normalizeBusinessDate(v))).length;
+    if (!dateCol && dateHits >= Math.ceil(vals.length * 0.5)) {
+      dateCol = h;
+      continue;
+    }
+
+    const numericVals = vals
+      .map((v) => toNumber(v, Number.NaN))
+      .filter((n) => Number.isFinite(n));
+
+    if (numericVals.length >= Math.ceil(vals.length * 0.6)) {
+      const sorted = [...numericVals].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)];
+      const allSmallInts = numericVals.every((n) => Number.isInteger(n) && n >= 1 && n <= 200);
+      if (!smallIntCol && allSmallInts && median <= 50) {
+        smallIntCol = h;
+      } else if (median > maxMedianAmount) {
+        maxMedianAmount = median;
+        amountCol = h;
+      }
+      continue;
+    }
+
+    if (!textCol) {
+      textCol = h;
+    }
+  }
+
+  return { dateCol, textCol, smallIntCol, amountCol };
+}
+
+export function suggestColumnMappings(
+  headers: string[],
+  category: BusinessCategory,
+  sampleRows: Record<string, unknown>[] = []
+): ColumnMappingField[] {
+  const inferred = inferColumnsFromSampleValues(headers, sampleRows);
+
+  if (category === 'sales') {
+    const dateCol =
+      findHeaderByKeywords(headers, [/tanggal/i, /tgl/i, /date/i, /waktu/i]) || inferred.dateCol;
+    const prodCol =
+      findHeaderByKeywords(headers, [
+        /nama.*(produk|barang|item|menu)/i,
+        /produk/i,
+        /barang/i,
+        /item/i,
+        /menu/i,
+      ]) || inferred.textCol;
+    const catCol = findHeaderByKeywords(headers, [/kategori/i, /category/i, /jenis/i, /grup/i]);
+    const qtyCol =
+      findHeaderByKeywords(headers, [/^qty$/i, /jumlah/i, /terjual/i, /kuantitas/i, /unit/i]) ||
+      inferred.smallIntCol;
+    const priceCol = findHeaderByKeywords(headers, [
+      /harga.*(jual|satuan)/i,
+      /^harga$/i,
+      /price/i,
+    ]);
+    const costCol = findHeaderByKeywords(headers, [
+      /harga.*(modal|beli|pokok)/i,
+      /hpp/i,
+      /modal/i,
+      /cost/i,
+    ]);
+    const totalCol =
+      findHeaderByKeywords(headers, [/total/i, /omzet/i, /subtotal/i, /nominal/i, /amount/i]) ||
+      inferred.amountCol;
+
+    return [
+      { targetField: 'Tanggal', label: 'Tanggal', required: true, sourceColumn: dateCol },
+      { targetField: 'Nama_Produk', label: 'Nama Barang', required: false, sourceColumn: prodCol },
+      { targetField: 'Kategori', label: 'Kategori', required: false, sourceColumn: catCol },
+      { targetField: 'Qty', label: 'Jumlah (Qty)', required: false, sourceColumn: qtyCol },
+      {
+        targetField: 'Harga_Satuan',
+        label: 'Harga Jual',
+        required: false,
+        sourceColumn: priceCol,
+      },
+      {
+        targetField: 'Harga_Modal',
+        label: 'Harga Modal (HPP)',
+        required: false,
+        sourceColumn: costCol,
+      },
+      { targetField: 'Total', label: 'Total Omzet', required: true, sourceColumn: totalCol },
+    ];
+  }
+
+  if (category === 'inventory') {
+    const prodCol =
+      findHeaderByKeywords(headers, [
+        /nama.*(produk|barang|item)/i,
+        /produk/i,
+        /barang/i,
+        /item/i,
+      ]) || inferred.textCol;
+    const catCol = findHeaderByKeywords(headers, [/kategori/i, /category/i, /jenis/i]);
+    const stockCol =
+      findHeaderByKeywords(headers, [/stok.*(tersisa|saat|awal|akhir)/i, /^stok$/i, /stock/i]) ||
+      inferred.smallIntCol;
+    const minCol = findHeaderByKeywords(headers, [/min/i, /batas/i, /reorder/i]);
+    const costCol = findHeaderByKeywords(headers, [
+      /harga.*(modal|beli|pokok)/i,
+      /hpp/i,
+      /modal/i,
+    ]);
+    const sellCol =
+      findHeaderByKeywords(headers, [/harga.*jual/i, /^harga$/i, /price/i]) || inferred.amountCol;
+
+    return [
+      { targetField: 'Nama_Produk', label: 'Nama Barang', required: true, sourceColumn: prodCol },
+      { targetField: 'Kategori', label: 'Kategori', required: false, sourceColumn: catCol },
+      {
+        targetField: 'Stok_Saat_Ini',
+        label: 'Stok Tersisa',
+        required: false,
+        sourceColumn: stockCol,
+      },
+      {
+        targetField: 'Stok_Minimum',
+        label: 'Batas Minimum',
+        required: false,
+        sourceColumn: minCol,
+      },
+      {
+        targetField: 'Harga_Modal',
+        label: 'Harga Modal',
+        required: false,
+        sourceColumn: costCol,
+      },
+      { targetField: 'Harga_Jual', label: 'Harga Jual', required: false, sourceColumn: sellCol },
+    ];
+  }
+
+  if (category === 'finance') {
+    const dateCol =
+      findHeaderByKeywords(headers, [/tanggal/i, /tgl/i, /date/i]) || inferred.dateCol;
+    const itemCol =
+      findHeaderByKeywords(headers, [
+        /keterangan/i,
+        /keperluan/i,
+        /nama.*barang/i,
+        /deskripsi/i,
+        /uraian/i,
+      ]) || inferred.textCol;
+    const typeCol = findHeaderByKeywords(headers, [/jenis/i, /tipe/i, /arus/i, /type/i]);
+    const supCol = findHeaderByKeywords(headers, [/supplier/i, /pemasok/i, /toko/i, /pihak/i]);
+    const nomCol =
+      findHeaderByKeywords(headers, [/nominal/i, /jumlah/i, /total/i, /biaya/i, /amount/i]) ||
+      inferred.amountCol;
+
+    return [
+      { targetField: 'Tanggal', label: 'Tanggal', required: false, sourceColumn: dateCol },
+      {
+        targetField: 'Nama_Barang_Keperluan',
+        label: 'Keterangan',
+        required: true,
+        sourceColumn: itemCol,
+      },
+      { targetField: 'Jenis', label: 'Jenis (Masuk/Keluar)', required: false, sourceColumn: typeCol },
+      { targetField: 'Supplier', label: 'Supplier / Pihak', required: false, sourceColumn: supCol },
+      { targetField: 'Nominal', label: 'Nominal (Rp)', required: true, sourceColumn: nomCol },
+    ];
+  }
+
+  const nameCol =
+    findHeaderByKeywords(headers, [/nama/i, /karyawan/i, /pegawai/i]) || inferred.textCol;
+  const roleCol = findHeaderByKeywords(headers, [/jabatan/i, /posisi/i, /role/i, /bagian/i]);
+  const salCol =
+    findHeaderByKeywords(headers, [/gaji/i, /upah/i, /salary/i, /nominal/i]) || inferred.amountCol;
+
+  return [
+    { targetField: 'Nama_Karyawan', label: 'Nama Karyawan', required: true, sourceColumn: nameCol },
+    { targetField: 'Jabatan', label: 'Jabatan', required: false, sourceColumn: roleCol },
+    { targetField: 'Gaji_Bulanan', label: 'Gaji Bulanan', required: false, sourceColumn: salCol },
+  ];
 }
 
 export function buildRowSignature(
   category: BusinessCategory,
   row: Record<string, unknown>
 ): string {
-  if (category === 'inventory') {
-    return `inv:${String(row['Nama_Produk'] ?? '').trim().toLowerCase()}`;
-  }
   if (category === 'sales') {
-    const tgl = normalizeBusinessDate(row['Tanggal']);
-    const prod = String(row['Nama_Produk'] ?? '').trim().toLowerCase();
-    const qty = toNumber(row['Qty'], 1);
-    const total = toNumber(row['Total'], 0);
-    return `sal:${tgl}|${prod}|${qty}|${total}`;
+    return [
+      'sales',
+      String(row['Tanggal'] ?? '').trim().toLowerCase(),
+      String(row['Nama_Produk'] ?? '').trim().toLowerCase(),
+      toNumber(row['Qty'], 1),
+      toNumber(row['Total'], 0),
+    ].join('|');
+  }
+  if (category === 'inventory') {
+    return ['inventory', String(row['Nama_Produk'] ?? '').trim().toLowerCase()].join('|');
   }
   if (category === 'finance') {
-    const tgl = normalizeBusinessDate(row['Tanggal']);
-    const desc = String(row['Nama_Barang_Keperluan'] ?? '').trim().toLowerCase();
-    const nom = toNumber(row['Nominal'], 0);
-    const jenis = String(row['Jenis'] ?? '').trim().toLowerCase();
-    return `fin:${tgl}|${desc}|${jenis}|${nom}`;
+    return [
+      'finance',
+      String(row['Tanggal'] ?? '').trim().toLowerCase(),
+      String(row['Nama_Barang_Keperluan'] ?? '').trim().toLowerCase(),
+      String(row['Jenis'] ?? 'Pengeluaran').trim().toLowerCase(),
+      toNumber(row['Nominal'], 0),
+    ].join('|');
   }
-  const emp = String(row['Nama_Karyawan'] ?? '').trim().toLowerCase();
-  const role = String(row['Jabatan'] ?? '').trim().toLowerCase();
-  return `emp:${emp}|${role}`;
+  return ['employee', String(row['Nama_Karyawan'] ?? '').trim().toLowerCase()].join('|');
 }
 
-export function detectCategoryFromSheet(
-  fileName: string,
-  headers: string[]
-): { category: BusinessCategory; reason: string } {
-  const lowerFile = fileName.toLowerCase();
-  const normHeaders = headers.map(normalizeKey);
+function isSummaryOrTotalRow(rawRow: Record<string, unknown>): boolean {
+  const nonEmptyCells = Object.values(rawRow)
+    .map((v) => String(v ?? '').trim())
+    .filter((s) => s !== '');
 
-  const scores: Record<BusinessCategory, number> = {
-    inventory: 0,
-    sales: 0,
-    finance: 0,
-    employee: 0,
-  };
+  if (nonEmptyCells.length === 0) return true;
 
-  if (/(produk|barang|stok|stock|gudang|katalog|inventaris|inventory|master)/.test(lowerFile)) {
-    scores.inventory += 7;
-  }
-  if (/(jual|penjualan|sales|transaksi|kasir|omzet|pos)/.test(lowerFile)) {
-    scores.sales += 7;
-  }
-  if (/(beli|pembelian|kulakan|pengeluaran|biaya|kas|keuangan|finance)/.test(lowerFile)) {
-    scores.finance += 7;
-  }
-  if (/(karyawan|pegawai|gaji|sdm|staff|staf|employee)/.test(lowerFile)) {
-    scores.employee += 7;
-  }
-
-  const hasDate = normHeaders.some((h) => /(tanggal|tgl|date|waktu)/.test(h));
-  const hasStock = normHeaders.some((h) => /(stok|stock|sisa|min_stok|stok_min|sku|barcode)/.test(h));
-  const hasCostAndSell =
-    normHeaders.some((h) => /(modal|beli|hpp|cost)/.test(h)) &&
-    normHeaders.some((h) => /(jual|price|harga)/.test(h));
-  const hasSalesTotal = normHeaders.some((h) =>
-    /(total|subtotal|omzet|nota|invoice|terjual)/.test(h)
-  );
-  const hasFinanceCol = normHeaders.some((h) =>
-    /(supplier|pemasok|keperluan|pengeluaran|pemasukan|debit|kredit|mutasi|biaya)/.test(h)
-  );
-  const hasEmpCol = normHeaders.some((h) =>
-    /(karyawan|pegawai|jabatan|posisi|gaji|upah|salary)/.test(h)
-  );
-
-  if (hasStock) scores.inventory += 9;
-  if (hasCostAndSell) scores.inventory += 6;
-  if (!hasDate && normHeaders.some((h) => /(produk|barang|item|nama)/.test(h))) {
-    scores.inventory += 5;
-  }
-
-  if (hasDate && hasSalesTotal) scores.sales += 9;
-  if (normHeaders.some((h) => /(terjual|nota|invoice|kasir)/.test(h))) scores.sales += 7;
-
-  if (hasFinanceCol) scores.finance += 9;
-  if (hasDate && normHeaders.some((h) => /(nominal|debit|kredit)/.test(h))) scores.finance += 5;
-
-  if (hasEmpCol) scores.employee += 10;
-
-  let winner: BusinessCategory = 'inventory';
-  let maxScore = -1;
-  (Object.keys(scores) as BusinessCategory[]).forEach((cat) => {
-    if (scores[cat] > maxScore) {
-      maxScore = scores[cat];
-      winner = cat;
-    }
-  });
-
-  const reasons: Record<BusinessCategory, string> = {
-    inventory: 'Kolom stok/daftar barang terdeteksi otomatis sebagai Produk & Stok.',
-    sales: 'Kolom tanggal & nominal transaksi terdeteksi otomatis sebagai Penjualan.',
-    finance: 'Kolom kas/supplier/pengeluaran terdeteksi otomatis sebagai Pembelian & Kas.',
-    employee: 'Kolom staf/jabatan/gaji terdeteksi otomatis sebagai Data Karyawan.',
-  };
-
-  return { category: winner, reason: reasons[winner] };
-}
-
-export function suggestColumnMappings(
-  headers: string[],
-  category: BusinessCategory
-): ColumnMappingField[] {
-  const normHeaderMap = new Map<string, string>();
-  headers.forEach((h) => {
-    normHeaderMap.set(normalizeKey(h), h);
-  });
-
-  return TARGET_FIELDS_BY_CATEGORY[category].map((spec) => {
-    let matchedSource = '';
-    for (const alias of spec.aliases) {
-      const exact = normHeaderMap.get(alias);
-      if (exact) {
-        matchedSource = exact;
-        break;
-      }
-    }
-    if (!matchedSource) {
-      for (const [normH, origH] of normHeaderMap.entries()) {
-        if (spec.aliases.some((a) => normH.includes(a))) {
-          matchedSource = origH;
-          break;
-        }
-      }
-    }
-    return {
-      targetField: spec.field,
-      label: spec.label,
-      sourceColumn: matchedSource,
-      required: spec.required,
-    };
-  });
-}
-
-function classifyCashflowDirection(rawType: unknown): 'Pemasukan' | 'Pengeluaran' {
-  const text = String(rawType ?? '').trim().toLowerCase();
-  if (/(masuk|pemasukan|income|debit|terima|pendapatan|\bin\b)/.test(text)) {
-    return 'Pemasukan';
-  }
-  return 'Pengeluaran';
+  return nonEmptyCells.some((cell) => STRICT_SUMMARY_LABEL_REGEX.test(cell));
 }
 
 export function normalizeAndValidateRows(
-  sheet: ParsedSheetBundle,
+  sheet: ParsedSheetData,
   category: BusinessCategory,
   mappings: ColumnMappingField[],
   existingSignatures: Set<string>
-): { normalizedRows: Record<string, unknown>[]; validation: ValidationReport } {
-  const mapByTarget = new Map<string, string>();
-  mappings.forEach((m) => {
-    if (m.sourceColumn) mapByTarget.set(m.targetField, m.sourceColumn);
-  });
+): {
+  normalizedRows: Record<string, unknown>[];
+  validation: ValidationSummary;
+} {
+  const mapLookup = new Map<string, string>();
+  for (const m of mappings) {
+    if (m.sourceColumn) {
+      mapLookup.set(m.targetField, m.sourceColumn);
+    }
+  }
 
-  const getVal = (row: Record<string, unknown>, targetField: string): unknown => {
-    const src = mapByTarget.get(targetField);
-    return src ? row[src] : undefined;
+  const getVal = (raw: Record<string, unknown>, target: string): unknown => {
+    const src = mapLookup.get(target);
+    return src ? raw[src] : undefined;
   };
+
+  const normalizedRows: Record<string, unknown>[] = [];
+  const seenInFile = new Set<string>();
+  const todayIso = new Date().toISOString().slice(0, 10);
 
   let skippedSummaryRows = 0;
   let duplicateInFileCount = 0;
   let duplicateWithExistingCount = 0;
-  let missingHppCount = 0;
   let zeroNominalCount = 0;
 
-  const seenInFile = new Set<string>();
-  const normalizedRows: Record<string, unknown>[] = [];
-  const todayIso = new Date().toISOString().slice(0, 10);
-
-  for (const rawRow of sheet.rawRows) {
-    const firstFewTexts = Object.values(rawRow).slice(0, 3);
-    if (firstFewTexts.some((v) => isSummaryLabel(v))) {
-      skippedSummaryRows += 1;
+  for (const raw of sheet.rawRows) {
+    if (isSummaryOrTotalRow(raw)) {
+      skippedSummaryRows++;
       continue;
     }
 
-    let normalized: Record<string, unknown>;
+    let normalized: Record<string, unknown> | null = null;
 
-    if (category === 'inventory') {
-      const nama = String(getVal(rawRow, 'Nama_Produk') ?? '').trim();
-      if (!nama || isSummaryLabel(nama)) {
-        skippedSummaryRows += 1;
-        continue;
-      }
-      const kategori = String(getVal(rawRow, 'Kategori') ?? 'Umum').trim() || 'Umum';
-      const stok = toNumber(getVal(rawRow, 'Stok_Saat_Ini'), 0);
-      const minStok = toNumber(getVal(rawRow, 'Stok_Minimum'), 5);
-      const modal = toNumber(getVal(rawRow, 'Harga_Modal'), 0);
-      const jual = toNumber(getVal(rawRow, 'Harga_Jual'), 0);
+    if (category === 'sales') {
+      const rawDate = getVal(raw, 'Tanggal');
+      const isoDate = normalizeBusinessDate(rawDate) || todayIso;
+      const rawName = String(getVal(raw, 'Nama_Produk') ?? '').trim();
+      const prodName = rawName || 'Penjualan Umum';
+      const catName = String(getVal(raw, 'Kategori') ?? '').trim() || 'Umum';
+      const qty = Math.max(1, toNumber(getVal(raw, 'Qty'), 1));
+      let price = Math.max(0, toNumber(getVal(raw, 'Harga_Satuan'), 0));
+      const cost = Math.max(0, toNumber(getVal(raw, 'Harga_Modal'), 0));
+      let total = Math.max(0, toNumber(getVal(raw, 'Total'), 0));
 
-      if (jual <= 0) zeroNominalCount += 1;
+      if (total === 0 && price > 0) total = qty * price;
+      if (price === 0 && total > 0) price = Math.round(total / qty);
 
-      normalized = {
-        Nama_Produk: nama,
-        Kategori: kategori,
-        Stok_Saat_Ini: stok,
-        Stok_Minimum: minStok,
-        Harga_Modal: modal,
-        Harga_Jual: jual,
-      };
-    } else if (category === 'sales') {
-      const nama = String(getVal(rawRow, 'Nama_Produk') ?? '').trim();
-      if (!nama || isSummaryLabel(nama)) {
-        skippedSummaryRows += 1;
-        continue;
-      }
-      const rawDate = getVal(rawRow, 'Tanggal');
-      const tgl = normalizeBusinessDate(rawDate) || todayIso;
-      const kategori = String(getVal(rawRow, 'Kategori') ?? 'Umum').trim() || 'Umum';
-      const qty = Math.max(1, toNumber(getVal(rawRow, 'Qty'), 1));
-      const hargaSatuan = toNumber(getVal(rawRow, 'Harga_Satuan'), 0);
-      const hargaModal = toNumber(getVal(rawRow, 'Harga_Modal'), 0);
-      const rawTotal = parseNumericValue(getVal(rawRow, 'Total'));
-      const total = rawTotal !== null && rawTotal > 0 ? rawTotal : qty * hargaSatuan;
-
-      if (total <= 0) zeroNominalCount += 1;
-      if (hargaModal <= 0) missingHppCount += 1;
+      if (total === 0 && !rawName) continue;
+      if (total === 0) zeroNominalCount++;
 
       normalized = {
-        Tanggal: tgl,
-        Nama_Produk: nama,
-        Kategori: kategori,
+        Tanggal: isoDate,
+        Nama_Produk: prodName,
+        Kategori: catName,
         Qty: qty,
-        Harga_Satuan: hargaSatuan > 0 ? hargaSatuan : qty > 0 ? Math.round(total / qty) : 0,
-        Harga_Modal: hargaModal,
+        Harga_Satuan: price,
+        Harga_Modal: cost,
         Total: total,
       };
-    } else if (category === 'finance') {
-      const keperluan = String(getVal(rawRow, 'Nama_Barang_Keperluan') ?? '').trim();
-      if (!keperluan || isSummaryLabel(keperluan)) {
-        skippedSummaryRows += 1;
-        continue;
-      }
-      const tgl = normalizeBusinessDate(getVal(rawRow, 'Tanggal')) || todayIso;
-      const supplier = String(getVal(rawRow, 'Supplier') ?? '-').trim() || '-';
-      const jenis = classifyCashflowDirection(getVal(rawRow, 'Jenis'));
-      const nominal = Math.abs(toNumber(getVal(rawRow, 'Nominal'), 0));
+    } else if (category === 'inventory') {
+      const prodName = String(getVal(raw, 'Nama_Produk') ?? '').trim();
+      if (!prodName) continue;
+      const catName = String(getVal(raw, 'Kategori') ?? '').trim() || 'Umum';
+      const stock = Math.max(0, toNumber(getVal(raw, 'Stok_Saat_Ini'), 0));
+      const minStock = Math.max(0, toNumber(getVal(raw, 'Stok_Minimum'), 5));
+      const cost = Math.max(0, toNumber(getVal(raw, 'Harga_Modal'), 0));
+      const sell = Math.max(0, toNumber(getVal(raw, 'Harga_Jual'), 0));
 
-      if (nominal <= 0) zeroNominalCount += 1;
+      if (sell === 0) zeroNominalCount++;
 
       normalized = {
-        Tanggal: tgl,
-        Nama_Barang_Keperluan: keperluan,
+        Nama_Produk: prodName,
+        Kategori: catName,
+        Stok_Saat_Ini: stock,
+        Stok_Minimum: minStock,
+        Harga_Modal: cost,
+        Harga_Jual: sell,
+      };
+    } else if (category === 'finance') {
+      const isoDate = normalizeBusinessDate(getVal(raw, 'Tanggal')) || todayIso;
+      const item = String(getVal(raw, 'Nama_Barang_Keperluan') ?? '').trim();
+      const nominal = Math.max(0, toNumber(getVal(raw, 'Nominal'), 0));
+      if (!item && nominal === 0) continue;
+
+      const rawType = String(getVal(raw, 'Jenis') ?? '').trim().toLowerCase();
+      const jenis = /(masuk|income|terima|pendapatan)/.test(rawType)
+        ? 'Pemasukan'
+        : 'Pengeluaran';
+      const supplier = String(getVal(raw, 'Supplier') ?? '').trim() || '-';
+
+      if (nominal === 0) zeroNominalCount++;
+
+      normalized = {
+        Tanggal: isoDate,
+        Nama_Barang_Keperluan: item || 'Catatan Kas',
         Supplier: supplier,
         Nominal: nominal,
         Jenis: jenis,
       };
     } else {
-      const namaEmp = String(getVal(rawRow, 'Nama_Karyawan') ?? '').trim();
-      if (!namaEmp || isSummaryLabel(namaEmp)) {
-        skippedSummaryRows += 1;
-        continue;
-      }
-      const jabatan = String(getVal(rawRow, 'Jabatan') ?? 'Staf').trim() || 'Staf';
-      const gaji = Math.abs(toNumber(getVal(rawRow, 'Gaji_Bulanan'), 0));
+      const empName = String(getVal(raw, 'Nama_Karyawan') ?? '').trim();
+      if (!empName) continue;
+      const role = String(getVal(raw, 'Jabatan') ?? '').trim() || 'Staf';
+      const salary = Math.max(0, toNumber(getVal(raw, 'Gaji_Bulanan'), 0));
 
       normalized = {
-        Nama_Karyawan: namaEmp,
-        Jabatan: jabatan,
-        Gaji_Bulanan: gaji,
+        Nama_Karyawan: empName,
+        Jabatan: role,
+        Gaji_Bulanan: salary,
       };
     }
 
     const sig = buildRowSignature(category, normalized);
     if (seenInFile.has(sig)) {
-      duplicateInFileCount += 1;
+      duplicateInFileCount++;
     } else {
       seenInFile.add(sig);
     }
+
     if (existingSignatures.has(sig)) {
-      duplicateWithExistingCount += 1;
+      duplicateWithExistingCount++;
     }
 
     normalizedRows.push(normalized);
   }
 
   const warnings: string[] = [];
-  if (sheet.truncatedByRowLimit) {
+  if (sheet.hasGeneratedHeaders) {
     warnings.push(
-      `File dibatasi maksimal ${MAX_IMPORT_ROWS_PER_SHEET.toLocaleString('id-ID')} baris pertama agar browser & laptop tetap ringan.`
+      'File tidak memiliki baris judul kolom di baris pertama, sehingga seluruh baris dibaca sebagai data transaksi.'
     );
   }
   if (skippedSummaryRows > 0) {
-    warnings.push(
-      `${skippedSummaryRows.toLocaleString('id-ID')} baris rekap (TOTAL / SUBTOTAL) dilewati otomatis agar angka tidak terhitung ganda.`
-    );
-  }
-  if (duplicateInFileCount > 0) {
-    warnings.push(
-      `Terdeteksi ${duplicateInFileCount.toLocaleString('id-ID')} baris duplikat di dalam file.`
-    );
+    warnings.push(`${skippedSummaryRows.toLocaleString('id-ID')} baris rekap TOTAL dilewati otomatis.`);
   }
   if (duplicateWithExistingCount > 0) {
     warnings.push(
-      `${duplicateWithExistingCount.toLocaleString('id-ID')} baris sudah ada di database (mode Merge akan mencegah duplikasi).`
+      `${duplicateWithExistingCount.toLocaleString('id-ID')} baris sudah pernah tersimpan sebelumnya (akan digabung tanpa ganda).`
     );
-  }
-  if (category === 'sales' && missingHppCount > 0) {
-    warnings.push(
-      `${missingHppCount.toLocaleString('id-ID')} transaksi belum memiliki kolom Harga Modal (sistem mencocokkan HPP dari katalog Produk & Stok jika tersedia).`
-    );
-  }
-  if (zeroNominalCount > 0) {
-    warnings.push(`${zeroNominalCount.toLocaleString('id-ID')} baris memiliki nominal Rp 0.`);
   }
 
   return {
     normalizedRows,
     validation: {
-      totalRawRows: sheet.rawRows.length + sheet.skippedEmptyRows,
       validRowsCount: normalizedRows.length,
-      skippedEmptyRows: sheet.skippedEmptyRows,
       skippedSummaryRows,
       duplicateInFileCount,
       duplicateWithExistingCount,
-      missingHppCount,
       zeroNominalCount,
-      truncatedByRowLimit: sheet.truncatedByRowLimit,
       warnings,
     },
   };
 }
 
-function parseCsvToMatrix(rawText: string): unknown[][] {
-  const text = rawText.replace(/^\uFEFF/, '');
-  if (!text.trim()) return [];
-
-  const firstLine = text.split(/\r?\n/)[0] ?? '';
-  const semiCount = (firstLine.match(/;/g) ?? []).length;
-  const tabCount = (firstLine.match(/\t/g) ?? []).length;
-  const commaCount = (firstLine.match(/,/g) ?? []).length;
-
-  const delimiter =
-    semiCount > commaCount && semiCount >= tabCount
-      ? ';'
-      : tabCount > commaCount
-        ? '\t'
-        : ',';
-
-  const rows: string[][] = [];
-  let currentRow: string[] = [];
-  let currentField = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (inQuotes) {
-      if (ch === '"' && next === '"') {
-        currentField += '"';
-        i += 1;
-      } else if (ch === '"') {
-        inQuotes = false;
-      } else {
-        currentField += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === delimiter) {
-      currentRow.push(currentField.trim());
-      currentField = '';
-    } else if (ch === '\r' && next === '\n') {
-      currentRow.push(currentField.trim());
-      rows.push(currentRow);
-      currentRow = [];
-      currentField = '';
-      i += 1;
-    } else if (ch === '\n' || ch === '\r') {
-      currentRow.push(currentField.trim());
-      rows.push(currentRow);
-      currentRow = [];
-      currentField = '';
-    } else {
-      currentField += ch;
-    }
-  }
-
-  if (currentField.length > 0 || currentRow.length > 0) {
-    currentRow.push(currentField.trim());
-    rows.push(currentRow);
-  }
-
-  return rows;
-}
-
-function cleanMatrixToSheetBundle(sheetName: string, matrix: unknown[][]): ParsedSheetBundle {
-  if (matrix.length < 2) {
-    return {
-      sheetName,
-      headers: [],
-      rawRows: [],
-      skippedEmptyRows: 0,
-      truncatedByRowLimit: false,
-    };
-  }
-
-  let headerIdx = 0;
-  let maxCols = 0;
-  for (let i = 0; i < Math.min(10, matrix.length); i++) {
-    const filled = (matrix[i] ?? []).filter((c) => String(c ?? '').trim() !== '').length;
-    if (filled > maxCols) {
-      maxCols = filled;
-      headerIdx = i;
-    }
-  }
-
-  const headers = (matrix[headerIdx] ?? []).map((h, idx) => {
-    const label = String(h ?? '').trim();
-    return label || `Kolom_${idx + 1}`;
-  });
-
-  const rawRows: Record<string, unknown>[] = [];
-  let skippedEmptyRows = 0;
-  let truncatedByRowLimit = false;
-
-  for (let r = headerIdx + 1; r < matrix.length; r++) {
-    const cells = matrix[r] ?? [];
-    const hasContent = cells.some((c) => String(c ?? '').trim() !== '');
-    if (!hasContent) {
-      skippedEmptyRows += 1;
-      continue;
-    }
-    if (rawRows.length >= MAX_IMPORT_ROWS_PER_SHEET) {
-      truncatedByRowLimit = true;
-      break;
-    }
-    const obj: Record<string, unknown> = {};
-    headers.forEach((h, idx) => {
-      obj[h] = cells[idx] ?? '';
-    });
-    rawRows.push(obj);
-  }
-
-  return {
-    sheetName,
-    headers,
-    rawRows,
-    skippedEmptyRows,
-    truncatedByRowLimit,
-  };
-}
-
 export async function parseBusinessFile(
   file: File,
-  existingSignatures: Set<string> = new Set()
+  _existingSignatures: Set<string>
 ): Promise<ParsedBusinessFileResult> {
-  if (file.size === 0) {
-    throw new Error('File kosong (0 byte). Pilih file yang berisi data.');
-  }
-  const sizeMb = file.size / (1024 * 1024);
-  if (sizeMb > MAX_IMPORT_FILE_SIZE_MB) {
-    throw new Error(
-      `Ukuran file (${sizeMb.toFixed(1)} MB) melebihi batas aman ${MAX_IMPORT_FILE_SIZE_MB} MB. Bagi file menjadi beberapa bagian agar laptop tidak lambat.`
-    );
+  const maxBytes = MAX_IMPORT_FILE_SIZE_MB * 1024 * 1024;
+  if (file.size > maxBytes) {
+    throw new Error(`Ukuran file melebihi batas maksimal ${MAX_IMPORT_FILE_SIZE_MB} MB.`);
   }
 
   const lower = file.name.toLowerCase();
-  let format: ParsedBusinessFileResult['format'];
-  if (lower.endsWith('.csv') || lower.endsWith('.txt')) format = 'csv';
-  else if (lower.endsWith('.xlsx')) format = 'xlsx';
-  else if (lower.endsWith('.xls')) format = 'xls';
-  else if (lower.endsWith('.json')) format = 'json';
-  else {
-    throw new Error('Format file tidak didukung. Gunakan file .CSV, .XLS, .XLSX, atau .JSON.');
-  }
+  const sheets: ParsedSheetData[] = [];
 
-  const sheets: ParsedSheetBundle[] = [];
-
-  if (format === 'csv') {
+  if (lower.endsWith('.json')) {
     const text = await file.text();
-    sheets.push(cleanMatrixToSheetBundle('CSV Data', parseCsvToMatrix(text)));
-  } else if (format === 'json') {
-    const text = await file.text();
-    const parsedJson = JSON.parse(text) as unknown;
+    const parsedJson: unknown = JSON.parse(text);
     const arr = Array.isArray(parsedJson)
       ? parsedJson
-      : typeof parsedJson === 'object' &&
-          parsedJson !== null &&
-          Array.isArray((parsedJson as Record<string, unknown>).data)
-        ? ((parsedJson as Record<string, unknown>).data as unknown[])
+      : parsedJson && typeof parsedJson === 'object' && Array.isArray((parsedJson as { data?: unknown }).data)
+        ? (parsedJson as { data: unknown[] }).data
         : [];
 
-    const objectRows = arr.filter(
-      (item): item is Record<string, unknown> =>
-        typeof item === 'object' && item !== null && !Array.isArray(item)
+    const validObjs = arr.filter(
+      (item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object'
     );
-    const headers = objectRows.length > 0 ? Object.keys(objectRows[0]) : [];
-    const truncated = objectRows.length > MAX_IMPORT_ROWS_PER_SHEET;
-
+    const headers = validObjs.length > 0 ? Object.keys(validObjs[0]) : [];
     sheets.push({
-      sheetName: 'JSON Data',
+      sheetName: 'Data_JSON',
       headers,
-      rawRows: objectRows.slice(0, MAX_IMPORT_ROWS_PER_SHEET),
-      skippedEmptyRows: 0,
-      truncatedByRowLimit: truncated,
+      rawRows: validObjs.slice(0, MAX_IMPORT_ROWS_PER_SHEET),
+      hasGeneratedHeaders: false,
     });
   } else {
     const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: 'array' });
+    const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
 
-    for (const name of workbook.SheetNames) {
-      const ws = workbook.Sheets[name];
+    for (const sName of workbook.SheetNames) {
+      const ws = workbook.Sheets[sName];
       if (!ws) continue;
-      const matrix = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '' });
-      const bundle = cleanMatrixToSheetBundle(name, matrix);
-      if (bundle.rawRows.length > 0) {
-        sheets.push(bundle);
+      const grid = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: '' });
+      const sheetData = gridToSheetData(sName, grid);
+      if (sheetData.rawRows.length > 0) {
+        sheets.push(sheetData);
       }
     }
   }
 
-  const validSheets = sheets.filter((s) => s.rawRows.length > 0);
-  if (validSheets.length === 0) {
-    throw new Error('Tidak ditemukan baris data yang dapat dibaca di dalam file ini.');
+  if (sheets.length === 0 || sheets[0].rawRows.length === 0) {
+    throw new Error('File kosong atau tidak berisi baris data yang dapat dibaca.');
   }
 
-  const activeSheet = validSheets[0];
-  const { category, reason } = detectCategoryFromSheet(file.name, activeSheet.headers);
-  const mappings = suggestColumnMappings(activeSheet.headers, category);
-  const { normalizedRows, validation } = normalizeAndValidateRows(
-    activeSheet,
-    category,
-    mappings,
-    existingSignatures
+  const firstSheet = sheets[0];
+  const detection = detectCategoryFromSheet(file.name, firstSheet.headers, firstSheet.rawRows);
+  const mappings = suggestColumnMappings(
+    firstSheet.headers,
+    detection.category,
+    firstSheet.rawRows
   );
 
   return {
     fileName: file.name,
-    fileSizeBytes: file.size,
-    format,
-    sheets: validSheets,
-    activeSheetName: activeSheet.sheetName,
-    detectedCategory: category,
-    detectionReason: reason,
+    sheets,
+    activeSheetName: firstSheet.sheetName,
+    detectedCategory: detection.category,
+    detectionReason: detection.reason,
     mappings,
-    normalizedRows,
-    validation,
   };
-}
-
-export async function parseSpreadsheetFile(file: File): Promise<Record<string, unknown>[]> {
-  const res = await parseBusinessFile(file);
-  return res.normalizedRows;
-}
-
-export function detectCategoryAndNormalize(
-  fileName: string,
-  rawRows: Record<string, unknown>[]
-): DatasetDetectionResult {
-  const headers = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
-  const { category, reason } = detectCategoryFromSheet(fileName, headers);
-  const mappings = suggestColumnMappings(headers, category);
-  const bundle: ParsedSheetBundle = {
-    sheetName: 'Sheet1',
-    headers,
-    rawRows,
-    skippedEmptyRows: 0,
-    truncatedByRowLimit: false,
-  };
-  const { normalizedRows } = normalizeAndValidateRows(bundle, category, mappings, new Set());
-  return {
-    detectedCategory: category,
-    confidence: 'Tinggi',
-    reason,
-    matchedColumns: headers.slice(0, 6),
-    rawRows,
-    normalizedRows,
-  };
-}
-
-export function reNormalizeRowsForCategory(
-  rawRows: Record<string, unknown>[],
-  category: BusinessCategory
-): Record<string, unknown>[] {
-  const headers = rawRows.length > 0 ? Object.keys(rawRows[0]) : [];
-  const mappings = suggestColumnMappings(headers, category);
-  const bundle: ParsedSheetBundle = {
-    sheetName: 'Sheet1',
-    headers,
-    rawRows,
-    skippedEmptyRows: 0,
-    truncatedByRowLimit: false,
-  };
-  return normalizeAndValidateRows(bundle, category, mappings, new Set()).normalizedRows;
 }

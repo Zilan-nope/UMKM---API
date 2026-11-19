@@ -1,39 +1,23 @@
 import {
   BarChart3,
+  Bot,
   Database,
+  FileText,
   LayoutDashboard,
   Settings,
-  Store,
   X,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import type { PageId } from '../../types/navigation';
+import { BrandLogo } from '../BrandLogo';
 
-const MENU_ITEMS: { id: PageId; label: string; desc: string; icon: typeof LayoutDashboard }[] = [
-  {
-    id: 'ringkasan',
-    label: 'Ringkasan Usaha',
-    desc: 'Omzet, HPP aktual & stok utama',
-    icon: LayoutDashboard,
-  },
-  {
-    id: 'analitik',
-    label: 'Analitik & Grafik',
-    desc: 'Tren kronologis & audit data',
-    icon: BarChart3,
-  },
-  {
-    id: 'database',
-    label: 'Database & Import',
-    desc: 'Smart File Import & transaksi',
-    icon: Database,
-  },
-  {
-    id: 'pengaturan',
-    label: 'Pengaturan',
-    desc: 'Profil usaha & tema tampilan',
-    icon: Settings,
-  },
+const MENU_ITEMS: { id: PageId; label: string; icon: typeof LayoutDashboard }[] = [
+  { id: 'ringkasan', label: 'Ringkasan Usaha', icon: LayoutDashboard },
+  { id: 'analitik', label: 'Analitik & Grafik', icon: BarChart3 },
+  { id: 'database', label: 'Data & Import', icon: Database },
+  { id: 'laporan', label: 'Laporan Keuangan', icon: FileText },
+  { id: 'ai', label: 'Asisten AI', icon: Bot },
+  { id: 'pengaturan', label: 'Pengaturan', icon: Settings },
 ];
 
 export function Sidebar() {
@@ -55,19 +39,8 @@ export function Sidebar() {
 
   const renderMenuContent = (isMobile: boolean) => (
     <div className="flex flex-col h-full bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800">
-      <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
-            <Store className="w-5 h-5" />
-          </div>
-          <div className="min-w-0">
-            <p className="font-bold text-sm truncate">{businessProfile.name}</p>
-            <p className="text-[11px] text-slate-500 truncate">
-              {businessProfile.city || 'Smart UMKM BI'}
-            </p>
-          </div>
-        </div>
-
+      <div className="px-5 py-5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+        <BrandLogo />
         {isMobile && (
           <button
             type="button"
@@ -80,7 +53,18 @@ export function Sidebar() {
         )}
       </div>
 
-      <nav className="flex-1 p-3.5 space-y-1.5 overflow-y-auto">
+      <div className="px-5 pt-4 pb-2">
+        <div className="px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80">
+          <p className="text-xs font-bold text-slate-800 dark:text-slate-100 truncate">
+            {businessProfile.name}
+          </p>
+          <p className="text-[11px] text-slate-500 truncate mt-0.5">
+            {businessProfile.city || 'Usaha UMKM'}
+          </p>
+        </div>
+      </div>
+
+      <nav className="flex-1 px-4 py-4 space-y-2.5 overflow-y-auto">
         {MENU_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = activePage === item.id;
@@ -89,34 +73,29 @@ export function Sidebar() {
               key={item.id}
               type="button"
               onClick={() => handleSelectPage(item.id)}
-              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-left transition-colors ${
+              className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-left transition-all ${
                 isActive
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  ? 'bg-emerald-600 text-white font-semibold shadow-sm'
+                  : 'text-slate-700 dark:text-slate-300 font-medium hover:bg-slate-100 dark:hover:bg-slate-800/80'
               }`}
             >
-              <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-white' : 'text-emerald-600'}`} />
-              <div className="min-w-0">
-                <p className="text-xs sm:text-sm font-bold truncate">{item.label}</p>
-                <p
-                  className={`text-[11px] truncate ${
-                    isActive ? 'text-emerald-100' : 'text-slate-500'
-                  }`}
-                >
-                  {item.desc}
-                </p>
-              </div>
+              <Icon
+                className={`w-5 h-5 shrink-0 ${
+                  isActive ? 'text-white' : 'text-slate-400 dark:text-slate-500'
+                }`}
+              />
+              <span className="text-sm truncate">{item.label}</span>
             </button>
           );
         })}
       </nav>
 
       <div className="p-4 border-t border-slate-200 dark:border-slate-800">
-        <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/80 text-xs">
-          <p className="font-semibold text-slate-700 dark:text-slate-200">Penyimpanan Offline</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">
-            {savedDatasets.length} dataset • {totalRows.toLocaleString('id-ID')} baris
-          </p>
+        <div className="px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 text-xs flex items-center justify-between">
+          <span className="text-slate-500">Data Tersimpan</span>
+          <span className="font-bold text-slate-700 dark:text-slate-200">
+            {totalRows.toLocaleString('id-ID')} baris
+          </span>
         </div>
       </div>
     </div>
