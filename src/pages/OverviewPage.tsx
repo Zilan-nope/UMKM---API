@@ -2,22 +2,20 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Banknote,
-  Info,
   Package,
-  ShoppingBag,
+  TrendingUp,
   Upload,
   Wallet,
 } from 'lucide-react';
 import { useMemo } from 'react';
+import { SalesTrendChartCard } from '../components/dashboard/SalesTrendChartCard';
 import { useApp } from '../context/AppContext';
 import { buildUnifiedBusinessSnapshot } from '../lib/analyticsEngine';
-import { formatCompactRupiah, formatFullRupiah } from '../lib/formatters';
+import { formatCompactRupiah, formatPercent } from '../lib/formatters';
 
 export function OverviewPage() {
   const { savedDatasets, businessProfile, setActivePage } = useApp();
   const currency = businessProfile.currency || 'IDR';
-  const rpCompact = (n: number) => formatCompactRupiah(n, currency);
-  const rpFull = (n: number) => formatFullRupiah(n, currency);
 
   const snapshot = useMemo(
     () => buildUnifiedBusinessSnapshot(savedDatasets),
@@ -30,17 +28,15 @@ export function OverviewPage() {
         <div className="w-12 h-12 rounded-2xl bg-emerald-100 dark:bg-emerald-950 text-emerald-600 flex items-center justify-center mx-auto">
           <Upload className="w-6 h-6" />
         </div>
-        <h2 className="text-lg font-bold">
-          Selamat Datang, {businessProfile.ownerName || 'Pemilik Usaha'}!
-        </h2>
-        <p className="text-xs sm:text-sm text-slate-500">
+        <h2 className="text-lg font-extrabold">Selamat Datang, Pemilik Usaha!</h2>
+        <p className="text-xs sm:text-sm text-slate-500 leading-relaxed">
           Unggah file CSV, Excel (.XLS/.XLSX), atau JSON — sistem otomatis memvalidasi,
-          menampilkan pratinjau, dan menghitung metrik usaha secara akurat.
+          menampilkan grafik tren, dan menghitung metrik usaha secara akurat.
         </p>
         <button
           type="button"
           onClick={() => setActivePage('database')}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold"
         >
           <Upload className="w-4 h-4" />
           <span>Impor Data Usaha Sekarang</span>
@@ -51,157 +47,147 @@ export function OverviewPage() {
 
   return (
     <div className="space-y-6">
-      {snapshot.salesWithoutHppCount > 0 && (
-        <div className="p-3.5 rounded-xl bg-sky-50 dark:bg-sky-950/40 border border-sky-200 dark:border-sky-800/60 flex items-start gap-2.5 text-xs text-sky-900 dark:text-sky-200">
-          <Info className="w-4 h-4 text-sky-600 shrink-0 mt-0.5" />
-          <p>
-            <strong>Catatan Akurasi HPP:</strong> Dari{' '}
-            {snapshot.totalTransactions.toLocaleString('id-ID')} transaksi penjualan, terdapat{' '}
-            <strong>{snapshot.salesWithoutHppCount.toLocaleString('id-ID')} transaksi</strong>{' '}
-            (senilai {rpCompact(snapshot.revenueWithoutHpp)}) yang belum memiliki data Harga Modal.
-            Sistem hanya menghitung laba kotor dari data HPP aktual tanpa asumsi margin palsu.
-          </p>
-        </div>
-      )}
-
+      {/* 4 Kartu KPI Utama */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
-          <div className="flex items-center justify-between text-slate-500 text-xs mb-2">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-1.5">
+          <div className="flex items-center justify-between text-xs text-slate-500">
             <span>Total Omzet Aktual</span>
             <Banknote className="w-4 h-4 text-emerald-600" />
           </div>
-          <p className="text-xl sm:text-2xl font-extrabold" title={rpFull(snapshot.totalRevenue)}>
-            {rpCompact(snapshot.totalRevenue)}
+          <p className="text-2xl font-extrabold tracking-tight">
+            {formatCompactRupiah(snapshot.totalRevenue, currency)}
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">
+          <p className="text-[11px] text-slate-400">
             {snapshot.totalTransactions.toLocaleString('id-ID')} transaksi unik
-            {snapshot.dateRange.start
-              ? ` (${snapshot.dateRange.start} s.d. ${snapshot.dateRange.end})`
-              : ''}
           </p>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
-          <div className="flex items-center justify-between text-slate-500 text-xs mb-2">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-1.5">
+          <div className="flex items-center justify-between text-xs text-slate-500">
             <span>Laba Kotor Aktual</span>
-            <ArrowUpRight className="w-4 h-4 text-emerald-600" />
+            <TrendingUp className="w-4 h-4 text-emerald-600" />
           </div>
-          <p
-            className="text-xl sm:text-2xl font-extrabold text-emerald-600"
-            title={rpFull(snapshot.totalGrossProfitActual)}
-          >
-            {rpCompact(snapshot.totalGrossProfitActual)}
+          <p className="text-2xl font-extrabold text-emerald-600 tracking-tight">
+            {formatCompactRupiah(snapshot.totalGrossProfitActual, currency)}
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">
-            HPP Aktual: {rpCompact(snapshot.totalActualHpp)} (Margin{' '}
-            {snapshot.grossMarginPercent.toFixed(1)}%)
+          <p className="text-[11px] text-slate-400">
+            HPP: {formatCompactRupiah(snapshot.totalActualHpp, currency)} (Margin{' '}
+            {formatPercent(snapshot.grossMarginPercent)})
           </p>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
-          <div className="flex items-center justify-between text-slate-500 text-xs mb-2">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-1.5">
+          <div className="flex items-center justify-between text-xs text-slate-500">
             <span>Katalog Produk & Stok</span>
             <Package className="w-4 h-4 text-sky-600" />
           </div>
-          <p className="text-xl sm:text-2xl font-extrabold">
+          <p className="text-2xl font-extrabold tracking-tight">
             {snapshot.totalProductSku.toLocaleString('id-ID')} SKU
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">
+          <p className="text-[11px] text-slate-400">
             {snapshot.totalStockUnits.toLocaleString('id-ID')} unit • Nilai{' '}
-            {rpCompact(snapshot.inventoryAssetValue)}
+            {formatCompactRupiah(snapshot.inventoryAssetValue, currency)}
           </p>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
-          <div className="flex items-center justify-between text-slate-500 text-xs mb-2">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-1.5">
+          <div className="flex items-center justify-between text-xs text-slate-500">
             <span>Pengeluaran & Kas</span>
             <Wallet className="w-4 h-4 text-amber-600" />
           </div>
-          <p className="text-xl sm:text-2xl font-extrabold" title={rpFull(snapshot.totalExpense)}>
-            {rpCompact(snapshot.totalExpense)}
+          <p className="text-2xl font-extrabold tracking-tight">
+            {formatCompactRupiah(snapshot.totalExpense, currency)}
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">
-            Arus kas bersih: {rpCompact(snapshot.netOperatingCashflow)}
+          <p className="text-[11px] text-slate-400">
+            Arus kas bersih:{' '}
+            {formatCompactRupiah(snapshot.netOperatingCashflow, currency)}
           </p>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
-              <ShoppingBag className="w-4 h-4 text-emerald-600" />
-              <span>Produk Kontributor Terbesar</span>
-            </h3>
+      {/* Grafik Tren Penjualan Interaktif + Pengatur Kalender */}
+      <SalesTrendChartCard savedDatasets={savedDatasets} currency={currency} />
+
+      {/* Produk Terlaris & Peringatan Stok Menipis */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-sm">Produk Kontributor Terbesar</h3>
             <button
               type="button"
               onClick={() => setActivePage('analitik')}
-              className="text-xs font-semibold text-emerald-600 hover:underline"
+              className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 hover:underline"
             >
-              Lihat Grafik →
+              <span>Lihat Kalender</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          {snapshot.topProducts.length > 0 ? (
-            <div className="divide-y divide-slate-200 dark:divide-slate-800">
-              {snapshot.topProducts.slice(0, 6).map((p, idx) => (
+          {snapshot.topProducts.length === 0 ? (
+            <p className="text-xs text-slate-400 py-6 text-center">
+              Belum ada data penjualan produk.
+            </p>
+          ) : (
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {snapshot.topProducts.slice(0, 6).map((p) => (
                 <div
-                  key={idx}
-                  className="py-2.5 flex items-center justify-between text-xs sm:text-sm"
+                  key={p.name}
+                  className="py-3 flex items-center justify-between gap-3"
                 >
-                  <div className="min-w-0 pr-3">
-                    <p className="font-semibold truncate">{p.name}</p>
-                    <p className="text-[11px] text-slate-500">
-                      {p.qtySold.toLocaleString('id-ID')} terjual
-                      {p.hasActualHpp ? ` • Laba ${rpCompact(p.grossProfit)}` : ''}
+                  <div className="min-w-0">
+                    <p className="text-xs sm:text-sm font-bold truncate">{p.name}</p>
+                    <p className="text-[11px] text-slate-400">
+                      {p.qtySold.toLocaleString('id-ID')} terjual • Laba{' '}
+                      {formatCompactRupiah(p.grossProfit, currency)}
                     </p>
                   </div>
-                  <span className="font-bold text-emerald-600 whitespace-nowrap">
-                    {rpCompact(p.revenue)}
+                  <span className="text-xs sm:text-sm font-extrabold text-emerald-600 shrink-0">
+                    {formatCompactRupiah(p.revenue, currency)}
                   </span>
                 </div>
               ))}
             </div>
-          ) : (
-            <p className="text-xs text-slate-500 py-6 text-center">
-              Belum ada transaksi penjualan tercatat.
-            </p>
           )}
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-600" />
-              <span>Peringatan Stok Menipis ({snapshot.lowStockItems.length})</span>
-            </h3>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500" />
+              <h3 className="font-bold text-sm">
+                Peringatan Stok Menipis ({snapshot.lowStockItems.length})
+              </h3>
+            </div>
             <button
               type="button"
               onClick={() => setActivePage('database')}
-              className="text-xs font-semibold text-emerald-600 hover:underline"
+              className="inline-flex items-center gap-1 text-xs font-bold text-emerald-600 hover:underline"
             >
-              Kelola Stok →
+              <span>Kelola Stok</span>
+              <ArrowUpRight className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          {snapshot.lowStockItems.length > 0 ? (
-            <div className="divide-y divide-slate-200 dark:divide-slate-800">
-              {snapshot.lowStockItems.slice(0, 6).map((item, idx) => (
+          {snapshot.lowStockItems.length === 0 ? (
+            <p className="text-xs text-slate-400 py-6 text-center">
+              Semua stok barang aman di atas batas minimum.
+            </p>
+          ) : (
+            <div className="divide-y divide-slate-100 dark:divide-slate-800">
+              {snapshot.lowStockItems.slice(0, 6).map((item) => (
                 <div
-                  key={idx}
-                  className="py-2.5 flex items-center justify-between text-xs sm:text-sm"
+                  key={item.name}
+                  className="py-3 flex items-center justify-between gap-3"
                 >
-                  <span className="font-semibold truncate pr-3">{item.name}</span>
-                  <span className="px-2.5 py-0.5 rounded-lg bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 text-xs font-bold whitespace-nowrap">
+                  <span className="text-xs sm:text-sm font-bold truncate">
+                    {item.name}
+                  </span>
+                  <span className="px-2.5 py-1 rounded-full bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 text-[11px] font-bold shrink-0">
                     Sisa {item.stock} (Min {item.minStock})
                   </span>
                 </div>
               ))}
             </div>
-          ) : (
-            <p className="text-xs text-slate-500 py-6 text-center">
-              Semua stok produk aman atau belum ada katalog stok.
-            </p>
           )}
         </div>
       </div>

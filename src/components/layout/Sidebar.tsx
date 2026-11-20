@@ -11,13 +11,12 @@ import { useApp } from '../../context/AppContext';
 import type { PageId } from '../../types/navigation';
 import { BrandLogo } from '../BrandLogo';
 
-const MENU_ITEMS: { id: PageId; label: string; icon: typeof LayoutDashboard }[] = [
+const TOP_MENU_ITEMS: { id: PageId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'ringkasan', label: 'Ringkasan Usaha', icon: LayoutDashboard },
-  { id: 'analitik', label: 'Analitik & Grafik', icon: BarChart3 },
+  { id: 'analitik', label: 'Analitik & Kalender', icon: BarChart3 },
   { id: 'database', label: 'Data & Import', icon: Database },
   { id: 'laporan', label: 'Laporan Keuangan', icon: FileText },
   { id: 'ai', label: 'Asisten AI', icon: Bot },
-  { id: 'pengaturan', label: 'Pengaturan', icon: Settings },
 ];
 
 export function Sidebar() {
@@ -43,7 +42,7 @@ export function Sidebar() {
         onClick={() => setMobileMenuOpen(false)}
       />
 
-      <aside className="relative w-68 max-w-[82vw] h-full z-10 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col">
+      <aside className="relative w-72 max-w-[82vw] h-full z-10 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col">
         <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
           <BrandLogo />
           <button
@@ -66,7 +65,7 @@ export function Sidebar() {
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-2 overflow-y-auto">
-          {MENU_ITEMS.map((item) => {
+          {TOP_MENU_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = activePage === item.id;
             return (
@@ -90,6 +89,26 @@ export function Sidebar() {
             );
           })}
         </nav>
+
+        {/* Pengaturan ditempatkan di bagian paling bawah */}
+        <div className="mt-auto p-3 border-t border-slate-200 dark:border-slate-800">
+          <button
+            type="button"
+            onClick={() => handleSelectPage('pengaturan')}
+            className={`w-full flex items-center gap-3.5 px-4 py-3 rounded-xl text-left transition-colors ${
+              activePage === 'pengaturan'
+                ? 'bg-emerald-600 text-white font-semibold'
+                : 'text-slate-700 dark:text-slate-300 font-medium hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Settings
+              className={`w-5 h-5 shrink-0 ${
+                activePage === 'pengaturan' ? 'text-white' : 'text-slate-400'
+              }`}
+            />
+            <span className="text-sm">Pengaturan</span>
+          </button>
+        </div>
       </aside>
     </div>
   );

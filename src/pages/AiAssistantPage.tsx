@@ -6,7 +6,7 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   askSmartAi,
@@ -35,7 +35,52 @@ const STARTER_CHIPS = [
   'Produk paling laris?',
   'Stok yang hampir habis?',
   'Ringkasan omzet & laba',
+  'Saran praktis menaikkan keuntungan',
 ];
+
+function renderInlineBold(text: string): ReactNode[] {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return (
+        <strong key={idx} className="font-bold text-slate-950 dark:text-white">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <span key={idx}>{part}</span>;
+  });
+}
+
+function FormattedAiMessage({ text }: { text: string }) {
+  const lines = text.split('\n');
+  return (
+    <div className="space-y-2 text-sm leading-relaxed">
+      {lines.map((line, i) => {
+        const trimmed = line.trim();
+        if (!trimmed) return <div key={i} className="h-1" />;
+
+        if (trimmed.startsWith('### ') || trimmed.startsWith('## ')) {
+          return (
+            <p key={i} className="font-bold text-emerald-700 dark:text-emerald-300 pt-1">
+              {renderInlineBold(trimmed.replace(/^#{2,3}\s+/, ''))}
+            </p>
+          );
+        }
+
+        if (/^(\d+\.|[-•*])\s+/.test(trimmed)) {
+          return (
+            <div key={i} className="pl-2 border-l-2 border-emerald-500/50">
+              {renderInlineBold(trimmed)}
+            </div>
+          );
+        }
+
+        return <p key={i}>{renderInlineBold(trimmed)}</p>;
+      })}
+    </div>
+  );
+}
 
 function buildConciseContext(
   businessName: string,
@@ -53,11 +98,14 @@ function buildConciseContext(
     .join('; ');
 
   return [
-    `Anda adalah asisten bisnis untuk "${businessName}".`,
-    `Jawab singkat, ramah, jelas, dan hanya berikan informasi yang relevan dengan pertanyaan user dalam Bahasa Indonesia.`,
-    `Data usaha: Transaksi=${snap.totalTransactions}, Omzet=${rp(snap.totalRevenue)}, HPP=${rp(snap.totalActualHpp)}, Laba Kotor=${rp(snap.totalGrossProfitActual)} (${formatPercent(snap.grossMarginPercent)}), Pengeluaran=${rp(snap.totalExpense)}, Arus Kas Bersih=${rp(snap.netOperatingCashflow)}, Total SKU=${snap.totalProductSku}.`,
+    `Anda adalah konsultan bisnis untuk "${businessName}".`,
+    `ATURAN WAJIB JAWABAN:`,
+    `1. Gunakan Bahasa Indonesia sehari-hari yang sederhana, ramah, dan langsung mudah dipahami pemilik toko/UMKM.`,
+    `2. DILARANG KERAS membuat tabel Markdown (|---|) atau tag HTML (<br>).`,
+    `3. Gunakan paragraf pendek dan poin bernomor (1., 2., 3.) dengan penjelasan praktis yang singkat.`,
+    `Data usaha aktual: Transaksi=${snap.totalTransactions}, Omzet=${rp(snap.totalRevenue)}, HPP=${rp(snap.totalActualHpp)}, Laba Kotor=${rp(snap.totalGrossProfitActual)} (${formatPercent(snap.grossMarginPercent)}), Pengeluaran=${rp(snap.totalExpense)}, Arus Kas Bersih=${rp(snap.netOperatingCashflow)}, Total SKU=${snap.totalProductSku}.`,
     topList ? `Produk terlaris: ${topList}.` : '',
-    lowStockList ? `Stok menipis: ${lowStockList}.` : 'Stok aman.',
+    lowStockList ? `Stok menipis: ${lowStockList}.` : 'Stok semua barang aman.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -89,7 +137,7 @@ function buildOfflineReply(
       `Stok yang perlu segera kulakan:\n` +
       snap.lowStockItems
         .slice(0, 6)
-        .map((i) => `• ${i.name} (sisa ${i.stock}, min ${i.minStock})`)
+        .map((i, idx) => `${idx + 1}. **${i.name}** — sisa ${i.stock} unit (batas min. ${i.minStock})`)
         .join('\n')
     );
   }
@@ -102,17 +150,18 @@ function buildOfflineReply(
         .slice(0, 5)
         .map(
           (p, i) =>
-            `${i + 1}. ${p.name} — ${p.qtySold} unit (${rpShort(p.revenue)})`
+            `${i + 1}. **${p.name}** — terjual ${p.qtySold} unit (${rpShort(p.revenue)})`
         )
         .join('\n')
     );
   }
 
   return (
-    `• Omzet: ${rp(snap.totalRevenue)} (${snap.totalTransactions.toLocaleString('id-ID')} transaksi)\n` +
-    `• Laba Kotor: ${rp(snap.totalGrossProfitActual)} (${formatPercent(snap.grossMarginPercent)})\n` +
-    `• Pengeluaran: ${rp(snap.totalExpense)}\n` +
-    `• Arus Kas Bersih: ${rp(snap.netOperatingCashflow)}`
+    `Ringkasan **${businessName}**:\n` +
+    `1. **Omzet**: ${rp(snap.totalRevenue)} (${snap.totalTransactions.toLocaleString('id-ID')} transaksi)\n` +
+    `2. **Laba Kotor**: ${rp(snap.totalGrossProfitActual)} (Margin ${formatPercent(snap.grossMarginPercent)})\n` +
+    `3. **Pengeluaran**: ${rp(snap.totalExpense)}\n` +
+    `4. **Arus Kas Bersih**: ${rp(snap.netOperatingCashflow)}`
   );
 }
 
@@ -207,8 +256,8 @@ export function AiAssistantPage() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto flex flex-col gap-3">
-      {/* Status Koneksi Minimalis */}
+    <div className="max-w-5xl w-full mx-auto flex flex-col gap-3 min-h-[calc(100vh-8.5rem)]">
+      {/* Bar Status Atas */}
       <div className="flex items-center justify-between gap-2 px-1">
         {apiKey ? (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
@@ -245,13 +294,13 @@ export function AiAssistantPage() {
         </div>
       </div>
 
-      {/* Kotak Chat Bersih */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex flex-col justify-between min-h-[28rem]">
-        <div className="flex-1 overflow-y-auto space-y-3 pr-1 max-h-[24rem]">
+      {/* Kotak Chat Lebar & Tinggi di PC */}
+      <div className="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 flex flex-col justify-between min-h-[calc(100vh-12rem)]">
+        <div className="flex-1 overflow-y-auto space-y-4 pr-2">
           {messages.length === 0 ? (
-            <div className="h-64 flex flex-col items-center justify-center text-center px-4 space-y-4">
-              <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
-                Tanyakan apa saja seputar penjualan, stok, atau laba{' '}
+            <div className="h-full min-h-[22rem] flex flex-col items-center justify-center text-center px-4 space-y-4">
+              <p className="text-base font-medium text-slate-600 dark:text-slate-300">
+                Tanyakan apa saja seputar penjualan, stok, atau strategi usaha{' '}
                 <strong className="text-slate-900 dark:text-white">
                   {businessProfile.name}
                 </strong>
@@ -263,7 +312,7 @@ export function AiAssistantPage() {
                     key={chip}
                     type="button"
                     onClick={() => void handleSend(chip)}
-                    className="px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-slate-200 dark:border-slate-700 text-xs font-medium transition-colors"
+                    className="px-3.5 py-2 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 border border-slate-200 dark:border-slate-700 text-xs font-medium transition-colors"
                   >
                     {chip}
                   </button>
@@ -279,13 +328,17 @@ export function AiAssistantPage() {
                 }`}
               >
                 <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-xs sm:text-sm leading-relaxed whitespace-pre-line ${
+                  className={`max-w-[90%] sm:max-w-[82%] rounded-2xl px-4 py-3 ${
                     m.sender === 'user'
-                      ? 'bg-emerald-600 text-white'
+                      ? 'bg-emerald-600 text-white text-sm leading-relaxed whitespace-pre-line'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100'
                   }`}
                 >
-                  {m.text}
+                  {m.sender === 'user' ? (
+                    m.text
+                  ) : (
+                    <FormattedAiMessage text={m.text} />
+                  )}
                 </div>
                 <span className="text-[10px] text-slate-400 mt-1 px-1">{m.time}</span>
               </div>
@@ -305,19 +358,19 @@ export function AiAssistantPage() {
             e.preventDefault();
             void handleSend(input);
           }}
-          className="flex items-center gap-2 pt-3 mt-3 border-t border-slate-100 dark:border-slate-800"
+          className="flex items-center gap-2.5 pt-4 mt-4 border-t border-slate-100 dark:border-slate-800"
         >
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Tulis pertanyaan Anda..."
-            className="flex-1 px-4 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm"
+            className="flex-1 px-4 py-3 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm"
           />
           <button
             type="submit"
             disabled={!input.trim() || isLoading}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-xs sm:text-sm font-semibold"
+            className="inline-flex items-center gap-1.5 px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-sm font-semibold"
           >
             <Send className="w-4 h-4" />
             <span>Kirim</span>

@@ -1,4 +1,10 @@
-export type AiProviderId = 'groq' | 'openrouter' | 'cerebras' | 'huggingface' | 'gemini';
+export type AiProviderId =
+  | 'groq'
+  | 'openrouter'
+  | 'cerebras'
+  | 'huggingface'
+  | 'gemini'
+  | 'openai';
 
 interface ProviderSpec {
   id: AiProviderId;
@@ -35,17 +41,26 @@ const PROVIDERS: Record<AiProviderId, ProviderSpec> = {
   cerebras: {
     id: 'cerebras',
     label: 'Cerebras',
-    models: ['llama-3.3-70b', 'llama3.1-8b'],
+    models: ['llama-3.3-70b', 'llama3.1-8b', 'qwen-3-32b'],
   },
   huggingface: {
     id: 'huggingface',
     label: 'Hugging Face',
-    models: ['meta-llama/Llama-3.3-70B-Instruct', 'Qwen/Qwen2.5-72B-Instruct'],
+    models: [
+      'meta-llama/Llama-3.3-70B-Instruct',
+      'Qwen/Qwen2.5-72B-Instruct',
+      'google/gemma-2-27b-it',
+    ],
   },
   gemini: {
     id: 'gemini',
     label: 'Google Gemini',
     models: ['gemini-2.5-flash', 'gemini-2.0-flash'],
+  },
+  openai: {
+    id: 'openai',
+    label: 'OpenAI',
+    models: ['gpt-4o-mini', 'gpt-4.1-mini'],
   },
 };
 
@@ -53,10 +68,12 @@ const STORAGE_KEY_SINGLE_API = 'smart_umkm_single_ai_key_v1';
 
 export function detectProviderFromKey(apiKey: string): AiProviderId {
   const k = apiKey.trim();
+  if (k.startsWith('gsk_')) return 'groq';
   if (k.startsWith('sk-or-')) return 'openrouter';
   if (k.startsWith('csk-')) return 'cerebras';
   if (k.startsWith('hf_')) return 'huggingface';
   if (k.startsWith('AIza')) return 'gemini';
+  if (k.startsWith('sk-')) return 'openai';
   return 'groq';
 }
 
@@ -72,6 +89,7 @@ export function loadSavedApiKey(): string {
     (import.meta.env.VITE_CEREBRAS_API_KEY as string | undefined)?.trim() ||
     (import.meta.env.VITE_HF_API_KEY as string | undefined)?.trim() ||
     (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)?.trim() ||
+    (import.meta.env.VITE_OPENAI_API_KEY as string | undefined)?.trim() ||
     '';
 
   try {
@@ -90,27 +108,55 @@ export function saveApiKeyToStorage(apiKey: string): void {
       localStorage.removeItem(STORAGE_KEY_SINGLE_API);
     }
   } catch {
-    // Abaikan jika penyimpanan lokal dibatasi browser
+    // Abaikan jika localStorage dibatasi
   }
 }
 
 function getEndpoint(provider: Exclude<AiProviderId, 'gemini'>): string {
-  if (provider === 'groq') return 'https://api.groq.com/openai/v1/chat/completions';
-  if (provider === 'openrouter') return 'https://openrouter.ai/api/v1/chat/completions';
-  if (provider === 'cerebras') return 'https://api.cerebras.ai/v1/chat/completions';
-  return 'https://router.huggingface.co/v1/chat/completions';
+  switch (provider) {
+    case 'groq':
+      return 'https://api.groq.com/openai/v1/chat/completions';
+    case 'openrouter':
+      return 'https://openrouter.ai/api/v1/chat/completions';
+    case 'cerebras':
+      return 'https://api.cerebras.ai/v1/chat/completions';
+    case 'huggingface':
+      return 'https://router.huggingface.co/v1/chat/completions';
+    case 'openai':
+      return 'https://api.openai.com/v1/chat/completions';
+  }
 }
 
 function parseErrorMessage(status: number, bodyText: string): string {
   try {
-    const json = JSON.parse(bodyText) as { error?: { message?: string } | string; message?: string };
+    const json = JSON.parse(bodyText) as {
+      error?: { message?: string } | string;
+      message?: string;
+    };
     const msg =
       typeof json.error === 'string' ? json.error : json.error?.message || json.message;
     if (msg) return msg;
   } catch {
-    // Gunakan potongan teks biasa
+    // Gunakan potongan teks mentah
   }
   return `Error ${status}`;
+}
+
+function sanitizeReadableReply(raw: string): string {
+  return raw
+    .replace(/<think>[\s\S]*?<\/think>\s*/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/?[^>]+(>|$)/g, '')
+    .replace(/^\|[\s-:|]+\|$/gm, '')
+    .replace(/^\|\s*(.+?)\s*\|$/gm, (_, rowContent: string) =>
+      rowContent
+        .split('|')
+        .map((cell) => cell.trim())
+        .filter(Boolean)
+        .join(' — ')
+    )
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 async function callOpenAiFormat(
@@ -142,8 +188,8 @@ async function callOpenAiFormat(
         ...history.slice(-4).map((h) => ({ role: h.role, content: h.content })),
         { role: 'user', content: userQuestion },
       ],
-      temperature: 0.3,
-      max_tokens: 700,
+      temperature: 0.35,
+      max_tokens: 900,
     }),
   });
 
@@ -159,7 +205,7 @@ async function callOpenAiFormat(
   };
   const text = data.choices?.[0]?.message?.content?.trim();
   if (!text) throw new Error('Respons AI kosong');
-  return text.replace(/<think>[\s\S]*?<\/think>\s*/gi, '').trim();
+  return sanitizeReadableReply(text);
 }
 
 async function callGeminiFormat(
@@ -183,7 +229,7 @@ async function callGeminiFormat(
         })),
         { role: 'user', parts: [{ text: userQuestion }] },
       ],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 700 },
+      generationConfig: { temperature: 0.35, maxOutputTokens: 900 },
     }),
   });
 
@@ -199,7 +245,7 @@ async function callGeminiFormat(
   };
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
   if (!text) throw new Error('Respons Gemini kosong');
-  return text;
+  return sanitizeReadableReply(text);
 }
 
 export async function askSmartAi(params: {
@@ -236,7 +282,6 @@ export async function askSmartAi(params: {
     } catch (err) {
       const typedErr = err as Error & { status?: number };
       lastError = typedErr;
-      // Jika API Key salah (401/403), langsung hentikan tanpa mencoba model lain
       if (typedErr.status === 401 || typedErr.status === 403) {
         throw new Error(`API Key ${spec.label} ditolak (${typedErr.message}).`);
       }
