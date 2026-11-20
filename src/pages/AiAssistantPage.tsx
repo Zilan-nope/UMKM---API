@@ -1,19 +1,17 @@
 import {
-  Check,
-  KeyRound,
   Loader2,
   RotateCcw,
   Send,
+  Settings,
   Wifi,
   WifiOff,
 } from 'lucide-react';
-import { useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useState } from 'react';
 import { useApp } from '../context/AppContext';
 import {
   askSmartAi,
   getProviderLabel,
   loadSavedApiKey,
-  saveApiKeyToStorage,
   type ChatTurn,
 } from '../lib/aiProviders';
 import {
@@ -55,11 +53,11 @@ function buildConciseContext(
     .join('; ');
 
   return [
-    `Anda adalah asisten bisnis pribadi untuk "${businessName}".`,
-    `Aturan jawaban: Jawab singkat, ramah, jelas, dan langsung ke inti pertanyaan user dalam Bahasa Indonesia. Jangan tampilkan seluruh laporan jika user hanya bertanya hal spesifik atau sekadar menyapa.`,
-    `Data usaha saat ini: Transaksi=${snap.totalTransactions}, Omzet=${rp(snap.totalRevenue)}, HPP=${rp(snap.totalActualHpp)}, Laba Kotor=${rp(snap.totalGrossProfitActual)} (${formatPercent(snap.grossMarginPercent)}), Pengeluaran=${rp(snap.totalExpense)}, Arus Kas Bersih=${rp(snap.netOperatingCashflow)}, Total SKU=${snap.totalProductSku}.`,
+    `Anda adalah asisten bisnis untuk "${businessName}".`,
+    `Jawab singkat, ramah, jelas, dan hanya berikan informasi yang relevan dengan pertanyaan user dalam Bahasa Indonesia.`,
+    `Data usaha: Transaksi=${snap.totalTransactions}, Omzet=${rp(snap.totalRevenue)}, HPP=${rp(snap.totalActualHpp)}, Laba Kotor=${rp(snap.totalGrossProfitActual)} (${formatPercent(snap.grossMarginPercent)}), Pengeluaran=${rp(snap.totalExpense)}, Arus Kas Bersih=${rp(snap.netOperatingCashflow)}, Total SKU=${snap.totalProductSku}.`,
     topList ? `Produk terlaris: ${topList}.` : '',
-    lowStockList ? `Stok menipis: ${lowStockList}.` : 'Stok semua barang aman.',
+    lowStockList ? `Stok menipis: ${lowStockList}.` : 'Stok aman.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -76,16 +74,16 @@ function buildOfflineReply(
   const rpShort = (n: number) => formatCompactRupiah(n, currency);
 
   if (/^(halo|hai|hi|pagi|siang|sore|malam|tes|test|bisa apa)/.test(q.trim())) {
-    return `Halo! Saya siap membantu mengecek penjualan, stok menipis, dan keuntungan ${businessName}. Silakan tanyakan langsung.`;
+    return `Halo! Saya siap membantu mengecek penjualan, stok menipis, dan laba ${businessName}.`;
   }
 
   if (snap.totalTransactions === 0 && snap.totalProductSku === 0 && snap.totalExpense === 0) {
-    return `Belum ada data transaksi di ${businessName}. Silakan unggah file atau catat data di menu Data & Import.`;
+    return `Belum ada data di ${businessName}. Silakan unggah data terlebih dahulu di menu Data & Import.`;
   }
 
   if (/(stok|habis|kulakan|restock|sisa)/.test(q)) {
     if (snap.lowStockItems.length === 0) {
-      return `Semua ${snap.totalProductSku} produk stoknya masih aman.`;
+      return `Semua ${snap.totalProductSku} produk stoknya aman.`;
     }
     return (
       `Stok yang perlu segera kulakan:\n` +
@@ -111,7 +109,7 @@ function buildOfflineReply(
   }
 
   return (
-    `• Omzet: ${rp(snap.totalRevenue)} (${snap.totalTransactions} transaksi)\n` +
+    `• Omzet: ${rp(snap.totalRevenue)} (${snap.totalTransactions.toLocaleString('id-ID')} transaksi)\n` +
     `• Laba Kotor: ${rp(snap.totalGrossProfitActual)} (${formatPercent(snap.grossMarginPercent)})\n` +
     `• Pengeluaran: ${rp(snap.totalExpense)}\n` +
     `• Arus Kas Bersih: ${rp(snap.netOperatingCashflow)}`
@@ -119,12 +117,11 @@ function buildOfflineReply(
 }
 
 export function AiAssistantPage() {
-  const { savedDatasets, businessProfile } = useApp();
+  const { savedDatasets, businessProfile, setActivePage } = useApp();
   const currency = businessProfile.currency || 'IDR';
+  const apiKey = loadSavedApiKey();
+  const providerLabel = getProviderLabel(apiKey);
 
-  const [apiKey, setApiKey] = useState<string>(() => loadSavedApiKey());
-  const [keyDraft, setKeyDraft] = useState<string>(apiKey);
-  const [showKeyInput, setShowKeyInput] = useState<boolean>(!apiKey);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -133,16 +130,6 @@ export function AiAssistantPage() {
     () => buildUnifiedBusinessSnapshot(savedDatasets),
     [savedDatasets]
   );
-
-  const providerLabel = getProviderLabel(apiKey);
-
-  const handleSaveKey = (e: FormEvent) => {
-    e.preventDefault();
-    const cleaned = keyDraft.trim();
-    setApiKey(cleaned);
-    saveApiKeyToStorage(cleaned);
-    setShowKeyInput(false);
-  };
 
   const handleSend = async (rawText: string) => {
     const text = rawText.trim();
@@ -186,18 +173,12 @@ export function AiAssistantPage() {
           },
         ]);
       } else {
-        const offlineText = buildOfflineReply(
-          text,
-          businessProfile.name,
-          currency,
-          snapshot
-        );
         setMessages((prev) => [
           ...prev,
           {
             id: `a_${Date.now()}`,
             sender: 'ai',
-            text: offlineText,
+            text: buildOfflineReply(text, businessProfile.name, currency, snapshot),
             time: new Date().toLocaleTimeString('id-ID', {
               hour: '2-digit',
               minute: '2-digit',
@@ -206,7 +187,7 @@ export function AiAssistantPage() {
         ]);
       }
     } catch (err) {
-      const reason = err instanceof Error ? err.message : 'Koneksi gagal';
+      const reason = err instanceof Error ? err.message : 'Koneksi API gagal';
       const fallback = buildOfflineReply(text, businessProfile.name, currency, snapshot);
       setMessages((prev) => [
         ...prev,
@@ -227,33 +208,28 @@ export function AiAssistantPage() {
 
   return (
     <div className="max-w-3xl mx-auto flex flex-col gap-3">
-      {/* Bar Atas Minimalis */}
+      {/* Status Koneksi Minimalis */}
       <div className="flex items-center justify-between gap-2 px-1">
-        <div className="inline-flex items-center gap-1.5 text-xs font-semibold">
-          {apiKey ? (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300">
-              <Wifi className="w-3.5 h-3.5" />
-              <span>Online ({providerLabel})</span>
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-              <WifiOff className="w-3.5 h-3.5" />
-              <span>Mode Offline</span>
-            </span>
-          )}
-        </div>
+        {apiKey ? (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
+            <Wifi className="w-3.5 h-3.5" />
+            <span>Online • {providerLabel}</span>
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-300 text-xs font-semibold">
+            <WifiOff className="w-3.5 h-3.5" />
+            <span>Mode Offline</span>
+          </span>
+        )}
 
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={() => {
-              setKeyDraft(apiKey);
-              setShowKeyInput((v) => !v);
-            }}
+            onClick={() => setActivePage('pengaturan')}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-emerald-500 text-xs font-semibold"
           >
-            <KeyRound className="w-3.5 h-3.5 text-emerald-600" />
-            <span>{apiKey ? 'API Key' : 'Pasang API Key'}</span>
+            <Settings className="w-3.5 h-3.5 text-emerald-600" />
+            <span>{apiKey ? 'Ubah API Key' : 'Atur API Key'}</span>
           </button>
 
           {messages.length > 0 && (
@@ -261,7 +237,7 @@ export function AiAssistantPage() {
               type="button"
               onClick={() => setMessages([])}
               className="p-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-500"
-              title="Hapus percakapan"
+              title="Bersihkan chat"
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
@@ -269,31 +245,7 @@ export function AiAssistantPage() {
         </div>
       </div>
 
-      {/* Kotak Input 1 Baris Hanya untuk API Key */}
-      {showKeyInput && (
-        <form
-          onSubmit={handleSaveKey}
-          className="flex items-center gap-2 p-2.5 rounded-2xl bg-white dark:bg-slate-900 border border-emerald-300 dark:border-emerald-800"
-        >
-          <input
-            type="password"
-            value={keyDraft}
-            onChange={(e) => setKeyDraft(e.target.value)}
-            placeholder="Tempel kode API Key Anda di sini (Groq / OpenRouter / Cerebras / HF / Gemini)..."
-            className="flex-1 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm"
-            autoFocus
-          />
-          <button
-            type="submit"
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shrink-0"
-          >
-            <Check className="w-3.5 h-3.5" />
-            <span>Simpan</span>
-          </button>
-        </form>
-      )}
-
-      {/* Ruang Chat Bersih */}
+      {/* Kotak Chat Bersih */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 flex flex-col justify-between min-h-[28rem]">
         <div className="flex-1 overflow-y-auto space-y-3 pr-1 max-h-[24rem]">
           {messages.length === 0 ? (
@@ -348,7 +300,6 @@ export function AiAssistantPage() {
           )}
         </div>
 
-        {/* Kolom Ketik Pesan */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
