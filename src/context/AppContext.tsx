@@ -9,8 +9,9 @@ import {
 import {
   clearAllDatasetsChunked,
   deleteDatasetChunked,
-  loadAllDatasetsChunked,
+  loadAllDatasetsLight,
   saveDatasetChunked,
+  type DatasetRow,
   type SavedDataset,
 } from '../lib/datasetStorage';
 import type { PageId } from '../types/navigation';
@@ -23,6 +24,14 @@ export interface BusinessProfile {
   currency: string;
 }
 
+interface IncomingDatasetInput {
+  id: string;
+  name: string;
+  category: string;
+  rows: DatasetRow[];
+  createdAt?: string;
+}
+
 interface AppContextValue {
   activePage: PageId;
   setActivePage: (page: PageId) => void;
@@ -30,8 +39,18 @@ interface AppContextValue {
   updateBusinessProfile: (patch: Partial<BusinessProfile>) => void;
   setBusinessProfile: (next: BusinessProfile) => void;
   savedDatasets: SavedDataset[];
-  addDataset: (dataset: SavedDataset) => Promise<void>;
-  upsertDataset: (dataset: SavedDataset) => Promise<void>;
+  saveDataset: (
+    dataset: IncomingDatasetInput,
+    onProgress?: (percent: number) => void
+  ) => Promise<SavedDataset>;
+  addDataset: (
+    dataset: IncomingDatasetInput,
+    onProgress?: (percent: number) => void
+  ) => Promise<SavedDataset>;
+  upsertDataset: (
+    dataset: IncomingDatasetInput,
+    onProgress?: (percent: number) => void
+  ) => Promise<SavedDataset>;
   removeDataset: (id: string) => Promise<void>;
   deleteDataset: (id: string) => Promise<void>;
   clearDatasets: () => Promise<void>;
@@ -84,11 +103,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    if (darkMode) document.documentElement.classList.add('dark');
+    else document.documentElement.classList.remove('dark');
     try {
       localStorage.setItem(THEME_STORAGE_KEY, String(darkMode));
     } catch {
@@ -98,13 +114,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    loadAllDatasetsChunked()
+    loadAllDatasetsLight()
       .then((loaded) => {
         if (active) setSavedDatasets(loaded);
       })
-      .catch(() => {
-        // Fallback kosong jika DB baru
-      })
+      .catch(() => {})
       .finally(() => {
         if (active) setIsLoadingDatasets(false);
       });
@@ -134,18 +148,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const upsertDataset = useCallback(async (dataset: SavedDataset) => {
-    await saveDatasetChunked(dataset);
-    setSavedDatasets((prev) => {
-      const idx = prev.findIndex((d) => d.id === dataset.id);
-      if (idx >= 0) {
-        const copy = prev.slice();
-        copy[idx] = dataset;
-        return copy;
-      }
-      return [...prev, dataset];
-    });
-  }, []);
+  const upsertDataset = useCallback(
+    async (
+      dataset: IncomingDatasetInput,
+      onProgress?: (percent: number) => void
+    ): Promise<SavedDataset> => {
+      const lightSaved = await saveDatasetChunked(dataset, onProgress);
+      setSavedDatasets((prev) => {
+        const idx = prev.findIndex((d) => d.id === lightSaved.id);
+        if (idx >= 0) {
+          const copy = prev.slice();
+          copy[idx] = lightSaved;
+          return copy;
+        }
+        return [...prev, lightSaved];
+      });
+      return lightSaved;
+    },
+    []
+  );
 
   const removeDataset = useCallback(async (id: string) => {
     await deleteDatasetChunked(id);
@@ -170,6 +191,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         updateBusinessProfile,
         setBusinessProfile,
         savedDatasets,
+        saveDataset: upsertDataset,
         addDataset: upsertDataset,
         upsertDataset,
         removeDataset,
@@ -191,8 +213,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 export function useApp(): AppContextValue {
   const ctx = useContext(AppContext);
-  if (!ctx) {
-    throw new Error('useApp harus digunakan di dalam AppProvider');
-  }
+  if (!ctx) throw new Error('useApp harus digunakan di dalam AppProvider');
   return ctx;
 }

@@ -1,5 +1,7 @@
+import type { SavedDataset } from './datasetStorage';
+
 export interface DailyMetrics {
-  dateIso: string; // YYYY-MM-DD
+  dateIso: string;
   transactions: number;
   revenue: number;
   actualHpp: number;
@@ -41,11 +43,6 @@ export interface TimeAnalyticsResult {
   };
 }
 
-interface DatasetLike {
-  category?: string;
-  rows?: Record<string, unknown>[];
-}
-
 const MONTH_NAMES_ID = [
   'Januari',
   'Februari',
@@ -76,61 +73,26 @@ const SHORT_MONTH_ID = [
   'Des',
 ];
 
-function toNumber(val: unknown): number {
-  if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
-  if (typeof val !== 'string') return 0;
-  const cleaned = val.replace(/[^\d.-]/g, '');
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function getField(row: Record<string, unknown>, candidates: string[]): unknown {
-  for (const key of candidates) {
-    if (row[key] !== undefined && row[key] !== null && row[key] !== '') {
-      return row[key];
-    }
-  }
-  const lowerMap = new Map<string, unknown>();
-  for (const [k, v] of Object.entries(row)) {
-    lowerMap.set(k.toLowerCase().trim(), v);
-  }
-  for (const key of candidates) {
-    const found = lowerMap.get(key.toLowerCase());
-    if (found !== undefined && found !== null && found !== '') {
-      return found;
-    }
-  }
-  return undefined;
-}
-
 export function parseFlexibleDateIso(raw: unknown): string | null {
   if (raw === undefined || raw === null || raw === '') return null;
-
   if (typeof raw === 'number' && raw > 20000 && raw < 90000) {
     const utcDays = Math.floor(raw - 25569);
     const d = new Date(utcDays * 86400 * 1000);
-    if (!Number.isNaN(d.getTime())) {
-      return d.toISOString().slice(0, 10);
-    }
+    if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
   }
-
   const str = String(raw).trim();
   const isoMatch = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
   if (isoMatch) {
     const [, y, m, d] = isoMatch;
     return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
   }
-
   const dmyMatch = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
   if (dmyMatch) {
     const [, d, m, y] = dmyMatch;
     return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
   }
-
   const parsed = new Date(str);
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString().slice(0, 10);
-  }
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
   return null;
 }
 
@@ -149,7 +111,7 @@ export function formatShortDateId(dateIso: string): string {
 function getMondayWeekStart(dateIso: string): string {
   const [y, m, d] = dateIso.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
-  const day = dt.getUTCDay(); // 0=Min .. 6=Sab
+  const day = dt.getUTCDay();
   const diffToMonday = day === 0 ? -6 : 1 - day;
   dt.setUTCDate(dt.getUTCDate() + diffToMonday);
   return dt.toISOString().slice(0, 10);
@@ -163,7 +125,7 @@ function addDaysIso(dateIso: string, days: number): string {
 }
 
 export function buildTimeAnalytics(
-  datasets: DatasetLike[],
+  datasets: Partial<SavedDataset>[],
   dateFrom?: string,
   dateTo?: string
 ): TimeAnalyticsResult {
@@ -179,89 +141,44 @@ export function buildTimeAnalytics(
     }
   >();
 
-  const ensureDay = (iso: string) => {
-    let bucket = dayBuckets.get(iso);
-    if (!bucket) {
-      bucket = {
-        transactions: 0,
-        revenue: 0,
-        actualHpp: 0,
-        expense: 0,
-        otherIncome: 0,
-        products: new Map(),
-      };
-      dayBuckets.set(iso, bucket);
-    }
-    return bucket;
-  };
-
   let globalMin = '';
   let globalMax = '';
 
   for (const ds of datasets) {
-    const rows = Array.isArray(ds.rows) ? ds.rows : [];
-    const cat = (ds.category || '').toLowerCase();
+    const dailyStats = ds.rollup?.dailyStats;
+    if (!dailyStats) continue;
 
-    for (const row of rows) {
-      const dateIso = parseFlexibleDateIso(
-        getField(row, ['Tanggal', 'tanggal', 'Date', 'date', 'tgl'])
-      );
-      if (!dateIso) continue;
+    for (const [iso, st] of Object.entries(dailyStats)) {
+      if (!globalMin || iso < globalMin) globalMin = iso;
+      if (!globalMax || iso > globalMax) globalMax = iso;
 
-      if (!globalMin || dateIso < globalMin) globalMin = dateIso;
-      if (!globalMax || dateIso > globalMax) globalMax = dateIso;
+      if (dateFrom && iso < dateFrom) continue;
+      if (dateTo && iso > dateTo) continue;
 
-      if (dateFrom && dateIso < dateFrom) continue;
-      if (dateTo && dateIso > dateTo) continue;
+      let b = dayBuckets.get(iso);
+      if (!b) {
+        b = {
+          transactions: 0,
+          revenue: 0,
+          actualHpp: 0,
+          expense: 0,
+          otherIncome: 0,
+          products: new Map(),
+        };
+        dayBuckets.set(iso, b);
+      }
 
-      const isSales =
-        cat.includes('penjualan') ||
-        cat.includes('sales') ||
-        getField(row, ['Harga_Satuan', 'harga_satuan', 'Qty', 'qty']) !== undefined;
+      b.transactions += st.transactions;
+      b.revenue += st.revenue;
+      b.actualHpp += st.actualHpp;
+      b.expense += st.expense;
+      b.otherIncome += st.otherIncome;
 
-      const isFinance =
-        cat.includes('keuangan') ||
-        cat.includes('pembelian') ||
-        cat.includes('kas') ||
-        getField(row, ['Nominal', 'nominal', 'Jenis', 'jenis']) !== undefined;
-
-      if (isSales && !cat.includes('keuangan') && !cat.includes('pembelian')) {
-        const qty = Math.max(1, toNumber(getField(row, ['Qty', 'qty', 'jumlah'])) || 1);
-        const sellPrice = toNumber(
-          getField(row, ['Harga_Satuan', 'harga_satuan', 'Harga_Jual', 'harga'])
-        );
-        const total =
-          toNumber(getField(row, ['Total', 'total', 'omzet'])) || qty * sellPrice;
-        const unitCost = toNumber(
-          getField(row, ['Harga_Modal', 'harga_modal', 'modal', 'hpp'])
-        );
-        const prodName = String(
-          getField(row, ['Nama_Produk', 'nama_produk', 'produk', 'nama']) || 'Produk'
-        ).trim();
-
-        const b = ensureDay(dateIso);
-        b.transactions += 1;
-        b.revenue += total;
-        b.actualHpp += unitCost > 0 ? unitCost * qty : 0;
-
-        const prevProd = b.products.get(prodName) || { qty: 0, revenue: 0 };
-        prevProd.qty += qty;
-        prevProd.revenue += total;
-        b.products.set(prodName, prevProd);
-      } else if (isFinance) {
-        const nominal = toNumber(
-          getField(row, ['Nominal', 'nominal', 'Total', 'total', 'jumlah'])
-        );
-        const jenis = String(
-          getField(row, ['Jenis', 'jenis', 'tipe', 'type']) || 'Pengeluaran'
-        ).toLowerCase();
-
-        const b = ensureDay(dateIso);
-        if (jenis.includes('masuk') || jenis.includes('income')) {
-          b.otherIncome += nominal;
-        } else {
-          b.expense += nominal;
-        }
+      for (const p of st.topProducts || []) {
+        const prev = b.products.get(p.name) || { qty: 0, revenue: 0 };
+        prev.qty += p.qty;
+        prev.revenue += p.revenue;
+        b.products.set(p.name, prev);
       }
     }
   }
@@ -275,7 +192,7 @@ export function buildTimeAnalytics(
     const grossProfit = b.revenue - b.actualHpp;
     const netCashflow = b.revenue + b.otherIncome - b.expense;
     const topProducts = Array.from(b.products.entries())
-      .map(([name, stats]) => ({ name, qty: stats.qty, revenue: stats.revenue }))
+      .map(([name, st]) => ({ name, qty: st.qty, revenue: st.revenue }))
       .sort((a, bItem) => bItem.revenue - a.revenue)
       .slice(0, 5);
 
@@ -294,7 +211,6 @@ export function buildTimeAnalytics(
     dailyList.push(metric);
   }
 
-  // Agregasi Mingguan
   const weekBuckets = new Map<
     string,
     {
@@ -348,7 +264,6 @@ export function buildTimeAnalytics(
     };
   });
 
-  // Agregasi Bulanan
   const monthBuckets = new Map<
     string,
     {

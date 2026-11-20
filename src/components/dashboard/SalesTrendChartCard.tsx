@@ -6,6 +6,7 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import type { SavedDataset } from '../../lib/datasetStorage';
 import {
   formatCompactRupiah,
   formatFullRupiah,
@@ -17,7 +18,7 @@ import {
 } from '../../lib/timeAnalytics';
 
 interface SalesTrendChartCardProps {
-  savedDatasets: { category?: string; rows?: Record<string, unknown>[] }[];
+  savedDatasets: SavedDataset[];
   currency: string;
 }
 
@@ -101,11 +102,9 @@ export function SalesTrendChartCard({
 
   const points = useMemo<ChartPoint[]>(() => {
     if (granularity === 'harian') {
-      // Ambil maksimal 60 titik terbaru agar batang tetap jelas dibaca
-      const slice = analytics.dailyList.slice(-60);
-      return slice.map((d) => ({
+      return analytics.dailyList.slice(-60).map((d) => ({
         key: d.dateIso,
-        label: d.dateIso.slice(8, 10) + '/' + d.dateIso.slice(5, 7),
+        label: `${d.dateIso.slice(8, 10)}/${d.dateIso.slice(5, 7)}`,
         fullLabel: formatShortDateId(d.dateIso),
         value: metric === 'revenue' ? d.revenue : d.grossProfit,
         transactions: d.transactions,
@@ -122,14 +121,13 @@ export function SalesTrendChartCard({
     }
     return analytics.monthlyList.map((m) => ({
       key: m.key,
-      label: m.label.slice(0, 3) + ' ' + m.key.slice(2, 4),
+      label: `${m.label.slice(0, 3)} ${m.key.slice(2, 4)}`,
       fullLabel: m.label,
       value: metric === 'revenue' ? m.revenue : m.grossProfit,
       transactions: m.transactions,
     }));
   }, [analytics, granularity, metric]);
 
-  // Hitung nilai maksimum secara iteratif (aman untuk ratusan ribu data)
   const maxVal = useMemo(() => {
     let highest = 1;
     for (let i = 0; i < points.length; i++) {
@@ -173,7 +171,7 @@ export function SalesTrendChartCard({
       : points[points.length - 1] ?? null;
 
   const svgWidth = 860;
-  const svgHeight = 230;
+  const svgHeight = 220;
   const padLeft = 16;
   const padRight = 16;
   const padTop = 18;
@@ -183,7 +181,6 @@ export function SalesTrendChartCard({
 
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-4">
-      {/* Header Judul & Kontrol Utama */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
@@ -193,7 +190,7 @@ export function SalesTrendChartCard({
             </h2>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Total periode terpilih:{' '}
+            Periode terpilih:{' '}
             <strong className="text-emerald-600">
               {formatFullRupiah(
                 metric === 'revenue'
@@ -206,14 +203,12 @@ export function SalesTrendChartCard({
           </p>
         </div>
 
-        {/* Kontrol Mode Grafik, Metrik & Periode */}
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          {/* Toggle Omzet / Laba */}
           <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-1">
             <button
               type="button"
               onClick={() => setMetric('revenue')}
-              className={`px-2.5 py-1 rounded-lg font-bold transition-colors ${
+              className={`px-2.5 py-1 rounded-lg font-bold ${
                 metric === 'revenue'
                   ? 'bg-white dark:bg-slate-900 text-emerald-600 shadow-2xs'
                   : 'text-slate-500'
@@ -224,7 +219,7 @@ export function SalesTrendChartCard({
             <button
               type="button"
               onClick={() => setMetric('grossProfit')}
-              className={`px-2.5 py-1 rounded-lg font-bold transition-colors ${
+              className={`px-2.5 py-1 rounded-lg font-bold ${
                 metric === 'grossProfit'
                   ? 'bg-white dark:bg-slate-900 text-emerald-600 shadow-2xs'
                   : 'text-slate-500'
@@ -234,7 +229,6 @@ export function SalesTrendChartCard({
             </button>
           </div>
 
-          {/* Toggle Harian / Mingguan / Bulanan */}
           <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-1">
             {(
               [
@@ -250,7 +244,7 @@ export function SalesTrendChartCard({
                   setGranularity(g.id);
                   setHoveredIdx(null);
                 }}
-                className={`px-2.5 py-1 rounded-lg font-bold transition-colors ${
+                className={`px-2.5 py-1 rounded-lg font-bold ${
                   granularity === g.id
                     ? 'bg-emerald-600 text-white'
                     : 'text-slate-600 dark:text-slate-300'
@@ -261,7 +255,6 @@ export function SalesTrendChartCard({
             ))}
           </div>
 
-          {/* Toggle Bar Chart / Line Chart */}
           <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-1">
             <button
               type="button"
@@ -271,7 +264,7 @@ export function SalesTrendChartCard({
                   ? 'bg-white dark:bg-slate-900 text-emerald-600 shadow-2xs'
                   : 'text-slate-500'
               }`}
-              title="Diagram Batang (Bar Chart)"
+              title="Diagram Batang"
             >
               <BarChart3 className="w-4 h-4" />
             </button>
@@ -283,7 +276,7 @@ export function SalesTrendChartCard({
                   ? 'bg-white dark:bg-slate-900 text-emerald-600 shadow-2xs'
                   : 'text-slate-500'
               }`}
-              title="Grafik Garis (Line Chart)"
+              title="Grafik Garis"
             >
               <TrendingUp className="w-4 h-4" />
             </button>
@@ -291,7 +284,7 @@ export function SalesTrendChartCard({
         </div>
       </div>
 
-      {/* Bar Filter Kalender */}
+      {/* Filter Kalender */}
       <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
         <div className="flex flex-wrap items-center gap-1.5">
           <button
@@ -300,7 +293,7 @@ export function SalesTrendChartCard({
             className={`px-2.5 py-1.5 rounded-lg border font-semibold ${
               !dateFrom && !dateTo
                 ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
-                : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                : 'border-slate-200 dark:border-slate-700'
             }`}
           >
             Semua
@@ -308,21 +301,21 @@ export function SalesTrendChartCard({
           <button
             type="button"
             onClick={() => applyPreset('7d')}
-            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 font-semibold"
+            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 font-semibold"
           >
             7 Hari
           </button>
           <button
             type="button"
             onClick={() => applyPreset('30d')}
-            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 font-semibold"
+            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 font-semibold"
           >
             30 Hari
           </button>
           <button
             type="button"
             onClick={() => applyPreset('month')}
-            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 font-semibold"
+            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 font-semibold"
           >
             Bulan Terakhir
           </button>
@@ -332,11 +325,11 @@ export function SalesTrendChartCard({
             className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border font-semibold ${
               showCalendarPicker
                 ? 'border-emerald-600 bg-emerald-600 text-white'
-                : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                : 'border-slate-200 dark:border-slate-700'
             }`}
           >
             <CalendarIcon className="w-3.5 h-3.5" />
-            <span>Pilih Kalender</span>
+            <span>Kalender</span>
           </button>
         </div>
 
@@ -346,7 +339,6 @@ export function SalesTrendChartCard({
             value={dateFrom}
             onChange={(e) => setDateFrom(e.target.value)}
             className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-            aria-label="Dari tanggal"
           />
           <span className="text-slate-400">–</span>
           <input
@@ -354,12 +346,10 @@ export function SalesTrendChartCard({
             value={dateTo}
             onChange={(e) => setDateTo(e.target.value)}
             className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
-            aria-label="Sampai tanggal"
           />
         </div>
       </div>
 
-      {/* Pop-up Kalender Pilihan Rentang Tanggal */}
       {showCalendarPicker && (
         <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 space-y-2.5">
           <div className="flex items-center justify-between">
@@ -392,15 +382,11 @@ export function SalesTrendChartCard({
 
           <div className="grid grid-cols-7 gap-1">
             {calendarCells.map((cell, idx) => {
-              if (!cell.iso || !cell.day) {
-                return <div key={`c_${idx}`} className="h-8" />;
-              }
+              if (!cell.iso || !cell.day) return <div key={`c_${idx}`} className="h-8" />;
               const isStart = dateFrom === cell.iso;
               const isEnd = dateTo === cell.iso;
               const isInRange =
-                Boolean(dateFrom && dateTo) &&
-                cell.iso > dateFrom &&
-                cell.iso < dateTo;
+                Boolean(dateFrom && dateTo) && cell.iso > dateFrom && cell.iso < dateTo;
               const hasTx = Boolean(analytics.dailyMap[cell.iso]);
 
               return (
@@ -408,14 +394,14 @@ export function SalesTrendChartCard({
                   key={cell.iso}
                   type="button"
                   onClick={() => handleSelectCalendarDay(cell.iso!)}
-                  className={`h-8 rounded-lg text-xs font-semibold transition-colors ${
+                  className={`h-8 rounded-lg text-xs font-semibold ${
                     isStart || isEnd
                       ? 'bg-emerald-600 text-white'
                       : isInRange
                         ? 'bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200'
                         : hasTx
-                          ? 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-emerald-500'
-                          : 'text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          ? 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700'
+                          : 'text-slate-400'
                   }`}
                 >
                   {cell.day}
@@ -423,18 +409,12 @@ export function SalesTrendChartCard({
               );
             })}
           </div>
-          <p className="text-[11px] text-slate-500">
-            Klik tanggal pertama sebagai awal rentang, lalu klik tanggal kedua sebagai akhir rentang.
-          </p>
         </div>
       )}
 
-      {/* Info Sorotan Titik / Batang Aktif */}
       {activePoint && (
         <div className="px-3.5 py-2 rounded-xl bg-slate-50 dark:bg-slate-800/70 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <span className="font-bold text-slate-700 dark:text-slate-200">
-            {activePoint.fullLabel}
-          </span>
+          <span className="font-bold">{activePoint.fullLabel}</span>
           <div className="flex items-center gap-3">
             <span className="text-slate-500">
               {activePoint.transactions.toLocaleString('id-ID')} transaksi
@@ -446,18 +426,16 @@ export function SalesTrendChartCard({
         </div>
       )}
 
-      {/* Kanvas Grafik Responsif (Bar Chart & Line Chart) */}
       {points.length === 0 ? (
-        <p className="text-xs text-slate-500 text-center py-10">
+        <p className="text-xs text-slate-500 text-center py-8">
           Tidak ada transaksi pada rentang kalender yang dipilih.
         </p>
       ) : (
         <div className="w-full overflow-x-auto">
           <svg
             viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-            className="w-full h-56 sm:h-64 select-none overflow-visible"
+            className="w-full h-56 select-none overflow-visible"
           >
-            {/* Garis bantu horizontal */}
             {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
               const y = padTop + plotHeight * (1 - ratio);
               return (
@@ -473,12 +451,7 @@ export function SalesTrendChartCard({
                     strokeWidth={1}
                   />
                   {ratio > 0 && (
-                    <text
-                      x={padLeft}
-                      y={y - 4}
-                      fontSize="10"
-                      className="fill-slate-400"
-                    >
+                    <text x={padLeft} y={y - 4} fontSize="10" className="fill-slate-400">
                       {formatCompactRupiah(maxVal * ratio, currency)}
                     </text>
                   )}
@@ -486,7 +459,6 @@ export function SalesTrendChartCard({
               );
             })}
 
-            {/* Mode Bar Chart */}
             {chartType === 'bar' &&
               points.map((pt, idx) => {
                 const slotW = plotWidth / points.length;
@@ -494,7 +466,6 @@ export function SalesTrendChartCard({
                 const barH = Math.max(2, (pt.value / maxVal) * plotHeight);
                 const x = padLeft + idx * slotW + (slotW - barW) / 2;
                 const y = padTop + plotHeight - barH;
-                const isHovered = hoveredIdx === idx;
                 const labelStep = Math.max(1, Math.ceil(points.length / 12));
 
                 return (
@@ -511,7 +482,7 @@ export function SalesTrendChartCard({
                       height={barH}
                       rx={4}
                       className={
-                        isHovered
+                        hoveredIdx === idx
                           ? 'fill-emerald-500'
                           : 'fill-emerald-600/85 hover:fill-emerald-500'
                       }
@@ -531,67 +502,63 @@ export function SalesTrendChartCard({
                 );
               })}
 
-            {/* Mode Line Chart */}
-            {chartType === 'line' && (() => {
-              const coords = points.map((pt, idx) => {
-                const stepX =
-                  points.length > 1 ? plotWidth / (points.length - 1) : plotWidth / 2;
-                const x =
-                  points.length > 1
-                    ? padLeft + idx * stepX
-                    : padLeft + plotWidth / 2;
-                const y = padTop + plotHeight - (pt.value / maxVal) * plotHeight;
-                return { x, y, pt, idx };
-              });
+            {chartType === 'line' &&
+              (() => {
+                const coords = points.map((pt, idx) => {
+                  const stepX =
+                    points.length > 1 ? plotWidth / (points.length - 1) : plotWidth / 2;
+                  const x =
+                    points.length > 1
+                      ? padLeft + idx * stepX
+                      : padLeft + plotWidth / 2;
+                  const y = padTop + plotHeight - (pt.value / maxVal) * plotHeight;
+                  return { x, y, pt, idx };
+                });
+                const polyPoints = coords.map((c) => `${c.x},${c.y}`).join(' ');
+                const areaPoints = `${coords[0].x},${padTop + plotHeight} ${polyPoints} ${coords[coords.length - 1].x},${padTop + plotHeight}`;
+                const labelStep = Math.max(1, Math.ceil(points.length / 12));
 
-              const polyPoints = coords.map((c) => `${c.x},${c.y}`).join(' ');
-              const areaPoints = `${coords[0].x},${padTop + plotHeight} ${polyPoints} ${coords[coords.length - 1].x},${padTop + plotHeight}`;
-              const labelStep = Math.max(1, Math.ceil(points.length / 12));
-
-              return (
-                <>
-                  <polygon
-                    points={areaPoints}
-                    className="fill-emerald-500/15"
-                  />
-                  <polyline
-                    fill="none"
-                    strokeWidth={2.5}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    points={polyPoints}
-                    className="stroke-emerald-600"
-                  />
-                  {coords.map(({ x, y, pt, idx }) => (
-                    <g
-                      key={pt.key}
-                      className="cursor-pointer"
-                      onMouseEnter={() => setHoveredIdx(idx)}
-                      onClick={() => setHoveredIdx(idx)}
-                    >
-                      <circle
-                        cx={x}
-                        cy={y}
-                        r={hoveredIdx === idx ? 5.5 : 3.5}
-                        className="fill-emerald-600 stroke-white dark:stroke-slate-900"
-                        strokeWidth={1.5}
-                      />
-                      {idx % labelStep === 0 && (
-                        <text
-                          x={x}
-                          y={svgHeight - 8}
-                          textAnchor="middle"
-                          fontSize="10"
-                          className="fill-slate-400 font-medium"
-                        >
-                          {pt.label}
-                        </text>
-                      )}
-                    </g>
-                  ))}
-                </>
-              );
-            })()}
+                return (
+                  <>
+                    <polygon points={areaPoints} className="fill-emerald-500/15" />
+                    <polyline
+                      fill="none"
+                      strokeWidth={2.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      points={polyPoints}
+                      className="stroke-emerald-600"
+                    />
+                    {coords.map(({ x, y, pt, idx }) => (
+                      <g
+                        key={pt.key}
+                        className="cursor-pointer"
+                        onMouseEnter={() => setHoveredIdx(idx)}
+                        onClick={() => setHoveredIdx(idx)}
+                      >
+                        <circle
+                          cx={x}
+                          cy={y}
+                          r={hoveredIdx === idx ? 5.5 : 3.5}
+                          className="fill-emerald-600 stroke-white dark:stroke-slate-900"
+                          strokeWidth={1.5}
+                        />
+                        {idx % labelStep === 0 && (
+                          <text
+                            x={x}
+                            y={svgHeight - 8}
+                            textAnchor="middle"
+                            fontSize="10"
+                            className="fill-slate-400 font-medium"
+                          >
+                            {pt.label}
+                          </text>
+                        )}
+                      </g>
+                    ))}
+                  </>
+                );
+              })()}
           </svg>
         </div>
       )}
